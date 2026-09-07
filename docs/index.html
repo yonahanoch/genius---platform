@@ -1437,26 +1437,18 @@ async function sendChat(role) {
   btn.disabled = true; inp.disabled = true;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch((window.GENIUS_API_URL || 'http://localhost:8080') + '/chat', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-allow-all': 'true'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        system: systemPrompts[role],
-        messages: chatHistory[role]
+        message: val,
+        role: role,
+        history: chatHistory[role]
       })
     });
-
     const data = await res.json();
-    const reply = data.content?.[0]?.text || 'לא הצלחתי לקבל תשובה.';
+    const reply = data.reply || data.error || 'לא הצלחתי לקבל תשובה.';
     chatHistory[role].push({ role: 'assistant', content: reply });
-
     const loadEl = document.getElementById(loadId);
     if (loadEl) loadEl.outerHTML = `<div class="msg ag">${reply.replace(/\n/g,'<br>')}<div class="mtime">${now}</div></div>`;
   } catch(e) {
