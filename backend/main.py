@@ -395,6 +395,40 @@ def whatsapp_webhook():
     send_whatsapp(store["phone"], reply)
     return "OK", 200
 
+CHAT_SYSTEM_PROMPTS = {
+    "store": "You are the Genius AI agent for a small retail store. Answer briefly and practically in Hebrew, based on general retail best practices (dead stock, hot products, pricing). Keep replies under 4 sentences.",
+    "admin": "You are the Genius AI agent for the network administrator, overseeing multiple stores. Answer briefly in Hebrew with network-level insights. Keep replies under 4 sentences.",
+    "supplier": "You are the Genius AI agent helping a supplier manage orders and pricing on the Genius network. Answer briefly in Hebrew. Keep replies under 4 sentences.",
+}
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    data = request.json or {}
+    message = (data.get("message") or "").strip()
+    role = data.get("role", "store")
+    history = data.get("history", [])
+
+    if not message:
+        return jsonify({"error": "Missing message"}), 400
+
+    if not ANTHROPIC_KEY:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 500
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+        messages = (history or []) + [{"role": "user", "content": message}]
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            system=CHAT_SYSTEM_PROMPTS.get(role, CHAT_SYSTEM_PROMPTS["store"]),
+            messages=messages,
+        )
+        reply = response.content[0].text
+        return jsonify({"reply": reply})
+    except Exception as e:
+        print(f"Chat error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # ── Stripe — תשלומים (הדבר שפיספסנו לגמרי) ──
 
 @app.route("/subscribe/<store_id>/<plan>")
