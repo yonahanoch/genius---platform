@@ -126,7 +126,7 @@ def analyze_with_claude(csv_text: str, store: dict, suppliers: dict) -> dict:
         messages=[{"role": "user", "content": prompt}]
     )
     
-    text = message.content[0].text.strip()
+    text = next(block.text for block in message.content if block.type == "text").strip()
     # נקה markdown אם יש
     text = text.replace("```json", "").replace("```", "").strip()
     
@@ -423,7 +423,7 @@ def chat():
             system=CHAT_SYSTEM_PROMPTS.get(role, CHAT_SYSTEM_PROMPTS["store"]),
             messages=messages,
         )
-        reply = response.content[0].text
+        reply = next(block.text for block in response.content if block.type == "text")
         return jsonify({"reply": reply})
     except Exception as e:
         print(f"Chat error: {e}")
