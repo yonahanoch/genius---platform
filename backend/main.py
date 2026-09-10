@@ -121,7 +121,7 @@ def analyze_with_claude(csv_text: str, store: dict, suppliers: dict) -> dict:
 - אם אין נתון, השתמש ב-0 או null"""
 
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -418,7 +418,7 @@ def chat():
         client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
         messages = (history or []) + [{"role": "user", "content": message}]
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5",
             max_tokens=500,
             system=CHAT_SYSTEM_PROMPTS.get(role, CHAT_SYSTEM_PROMPTS["store"]),
             messages=messages,
