@@ -500,14 +500,76 @@ def admin_dashboard():
         }
     })
 
-# ═══════════════════════════════════════
-# ── Scheduler — ניתוח לילי אוטומטי ──
+# ===========================================
+# Transfer opportunities between stores
+# ===========================================
+def find_transfer_opportunities(db):
+    latest = {}
+    for rec in db["recommendations"]:
+        sid = rec["store_id"]
+        if sid not in latest or rec["created"] > latest[sid]["created"]:
+            latest[sid] = rec
+    opps = []
+    ids = list(latest.keys())
+    for a in ids:
+        sa = db["stores"].get(a)
+        if not sa:
+            continue
+        dead = latest[a]["analysis"].get("dead_products", [])
+        for b in ids:
+            if a == b:
+                continue
+            sb = db["stores"].get(b)
+            if not sb:
+                continue
+            hot = latest[b]["analysis"].get("hot_products", [])
+            for dp in dead:
+                if dp.get("stock", 0) <= 0:
+                    continue
+                for hp in hot:
+                    n1 = (dp.get("name") or "").strip().lower()
+                    n2 = (hp.get("name") or "").strip().lower()
+                    if n1 != n2:
+                        continue
+                    qty = min(dp.get("stock", 0), hp.get("order_quantity", dp.get("stock", 0)))
+                    if qty <= 0:
+                        continue
+                    reason = sa.get("name") + " has stock, " + sb.get("name") + " needs it"
+                    opps.append({"product_name": dp.get("name"), "from_store_id": a, "from_store_name": sa.get("name"), "from_store_phone": sa.get("phone"), "to_store_id": b, "to_store_name": sb.get("name"), "to_store_phone": sb.get("phone"), "suggested_quantity": qty, "suggested_price": dp.get("recommended_price"), "reason": reason})
+    return opps
+
+    @app.route("/network/transfer-opportunities", methods=["GET"])
+def transfer_opportunities():
+    db = load_db()
+    opps = find_transfer_opportunities(db)
+    return jsonify({"opportunities": opps, "count": len(opps)})
+
+@app.route("/network/transfer-opportunities/notify", methods=["POST"])
+def notify_transfer_opportunities():
+    data = request.json or {}
+    db = load_db()
+    opps = find_transfer_opportunities(db)
+    match = None
+    for o in opps:
+            same_from = o["from_store_id"] == data.get("from_store_id")
+            same_to = o["to_store_id"] == data.get("to_store_id")
+            same_name = o["product_name"] == data.get("product_name")
+            if same_from and same_to and same_name:
+                match = o
+                break
+    if not match:
+        return jsonify({"error": "not found"}), 404
+    qty2 = str(match["suggested_quantity"])
+    m1 = "Genius opportunity: " + qty2 + " units of " + match["product_name"] + " available. Contact: " + str(match["to_store_phone"])
+    m2 = "Genius opportunity: " + match["from_store_name"] + " has " + qty2 + " units of " + match["product_name"] + " you need. Contact: " + str(match["from_store_phone"])
+    s1 = send_whatsapp(match["from_store_phone"], m1)
+    s2 = send_whatsapp(match["to_store_phone"], m2)
+    notified_list = [match["from_store_id"], match["to_store_id"]]
+    return jsonify({"success": s1 and s2, "notified": notified_list})
 
 def nightly_job():
-    """
-    רץ כל לילה ב-3:00.
-    בשלב הזה: מתריע אילו חנויות צריכות ניתוח.
-    בעתיד: שולף אוטומטית מהמייל/API של כל חנות.
+        """
+    Nightly analysis job
     """
     print(f"\n=== ניתוח לילי {datetime.now()} ===")
     db = load_db()
