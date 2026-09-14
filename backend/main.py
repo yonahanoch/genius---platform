@@ -538,7 +538,7 @@ def find_transfer_opportunities(db):
                     opps.append({"product_name": dp.get("name"), "from_store_id": a, "from_store_name": sa.get("name"), "from_store_phone": sa.get("phone"), "to_store_id": b, "to_store_name": sb.get("name"), "to_store_phone": sb.get("phone"), "suggested_quantity": qty, "suggested_price": dp.get("recommended_price"), "reason": reason})
     return opps
 
-    @app.route("/network/transfer-opportunities", methods=["GET"])
+@app.route("/network/transfer-opportunities", methods=["GET"])
 def transfer_opportunities():
     db = load_db()
     opps = find_transfer_opportunities(db)
