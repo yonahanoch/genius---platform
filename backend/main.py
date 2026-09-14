@@ -568,7 +568,7 @@ def notify_transfer_opportunities():
     return jsonify({"success": s1 and s2, "notified": notified_list})
 
 def nightly_job():
-        """
+    """
     Nightly analysis job
     """
     print(f"\n=== ניתוח לילי {datetime.now()} ===")
