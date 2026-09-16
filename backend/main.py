@@ -616,3 +616,113 @@ if __name__ == "__main__":
     print(f"Stripe: {'✓' if STRIPE_KEY else '✗ חסר'}")
     print("=" * 50)
     app.run(host="0.0.0.0", port=8080)
+
+
+# ===========================================
+# Demand forecasting - function #13
+# ===========================================
+def parse_sales_csv(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text.strip()))
+    sales = {}
+    def pick(row, options):
+        for key in row:
+            if key and key.strip().lower() in options:
+                return row[key]
+        return None
+    date_keys = {"date", "day"}
+    name_keys = {"product", "name", "product_name"}
+    qty_keys = {"qty", "quantity", "units", "sold"}
+    for row in reader:
+        raw_date = pick(row, date_keys)
+        raw_name = pick(row, name_keys)
+        raw_qty = pick(row, qty_keys)
+        if not raw_name or not raw_qty:
+            continue
+        name = raw_name.strip()
+        if not name:
+            continue
+        try:
+            qty = float(str(raw_qty).strip())
+        except (ValueError, TypeError):
+            continue
+        d = None
+        if raw_date:
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+                try:
+                    d = datetime.strptime(str(raw_date).strip(), fmt)
+                    break
+                except ValueError:
+                    continue
+        sales.setdefault(name, []).append((d, qty))
+    return sales
+
+def forecast_product(history, current_stock, lead_time_days=3):
+    dated = [(d, q) for d, q in history if d is not None]
+    total_qty = sum(q for _, q in history)
+    if len(dated) >= 2:
+        dates = [d for d, _ in dated]
+        span_days = (max(dates) - min(dates)).days + 1
+        dated_qty = sum(q for _, q in dated)
+        daily_rate = dated_qty / span_days if span_days > 0 else dated_qty
+    elif total_qty > 0:
+        daily_rate = total_qty / 30
+    else:
+        daily_rate = 0.0
+    trend = "stable"
+    if len(dated) >= 4:
+        ordered = sorted(dated, key=lambda x: x[0])
+        mid = len(ordered) // 2
+        first = sum(q for _, q in ordered[:mid])
+        second = sum(q for _, q in ordered[mid:])
+        if first > 0:
+            change = (second - first) / first
+            if change > 0.20:
+                trend = "rising"
+            elif change < -0.20:
+                trend = "falling"
+    adjusted_rate = daily_rate
+    if trend == "rising":
+        adjusted_rate = daily_rate * 1.25
+    elif trend == "falling":
+        adjusted_rate = daily_rate * 0.80
+    if adjusted_rate > 0:
+        days_until_empty = int(current_stock / adjusted_rate)
+    else:
+        days_until_empty = 999
+    reorder_now = days_until_empty <= lead_time_days + 2
+    needed = adjusted_rate * (14 + lead_time_days)
+    order_quantity = max(0, int(round(needed - current_stock)))
+    if len(dated) >= 10:
+        confidence = "high"
+    elif len(dated) >= 4 or total_qty > 0:
+        confidence = "medium"
+    else:
+        confidence = "low"
+    return {"daily_rate": round(daily_rate, 2), "adjusted_daily_rate": round(adjusted_rate, 2), "days_until_empty": days_until_empty, "reorder_now": reorder_now, "order_quantity": order_quantity, "trend": trend, "confidence": confidence, "data_points": len(history)}
+
+def forecast_all(csv_text, stock_map, lead_time_days=3):
+    sales = parse_sales_csv(csv_text)
+    results = []
+    for name, history in sales.items():
+        stock = stock_map.get(name, 0)
+        f = forecast_product(history, stock, lead_time_days)
+        f["product_name"] = name
+        f["current_stock"] = stock
+        results.append(f)
+    results.sort(key=lambda r: r["days_until_empty"])
+    return results
+
+@app.route("/forecast/<store_id>", methods=["POST"])
+def forecast_endpoint(store_id):
+    data = request.json or {}
+    csv_text = data.get("csv", "")
+    stock_map = data.get("stock", {})
+    lead_time = data.get("lead_time_days", 3)
+    if not csv_text:
+        return jsonify({"error": "missing csv"}), 400
+    try:
+        results = forecast_all(csv_text, stock_map, lead_time)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    urgent = [r for r in results if r["reorder_now"]]
+    return jsonify({"store_id": store_id, "forecasts": results, "urgent_count": len(urgent), "total_products": len(results)})
