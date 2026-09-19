@@ -960,6 +960,201 @@ def lending_endpoint(store_id):
     profile["store_id"] = store_id
     return jsonify(profile)
 
+# ===========================================
+# Demo data seeding
+# ===========================================
+
+def _demo_sales_csv(base, months=6, growth=0):
+    """Builds a realistic sales CSV: 3 sale days a month, optional growth."""
+    rows = ["date,product,qty"]
+    for i in range(months):
+        month = 3 + i
+        for day in (5, 15, 25):
+            for name, qty in base:
+                q = int(qty * (1 + growth * i))
+                rows.append("2026-%02d-%02d,%s,%d" % (month, day, name, max(1, q)))
+    return "\n".join(rows)
+
+
+DEMO_STORES = {
+    "demo_pharm": {
+        "name": "כהן פארם",
+        "phone": "0501234567",
+        "active": True,
+        "demo": True,
+        "stock": {"חלב תנובה 3%": 40, "שמפו הד אנד שולדרס": 25, "קרם הגנה SPF 50": 45},
+        "prices": {"חלב תנובה 3%": 7, "שמפו הד אנד שולדרס": 24, "קרם הגנה SPF 50": 38},
+        "sales_base": [("חלב תנובה 3%", 60), ("שמפו הד אנד שולדרס", 14)],
+        "growth": 0.06,
+        "analysis": {
+            "dead_products": [
+                {"name": "קרם הגנה SPF 50", "stock": 45, "days_no_sale": 62,
+                 "current_price": 38, "recommended_price": 27,
+                 "reason": "סוף עונת הקיץ — המלאי תקוע"},
+            ],
+            "hot_products": [
+                {"name": "חלב תנובה 3%", "weekly_sales": 140, "stock": 40,
+                 "days_until_empty": 2, "order_quantity": 150, "supplier": "תנובה"},
+                {"name": "שמפו הד אנד שולדרס", "weekly_sales": 32, "stock": 25,
+                 "days_until_empty": 5, "order_quantity": 80, "supplier": "P&G"},
+            ],
+            "total_potential_savings": 1870,
+            "summary_he": "שני מוצרים עומדים להיגמר השבוע. קרם ההגנה תקוע 62 יום — כדאי להוריד מחיר.",
+        },
+    },
+    "demo_super": {
+        "name": "סופר דיזנגוף",
+        "phone": "0502345678",
+        "active": True,
+        "demo": True,
+        "stock": {"חלב תנובה 3%": 55, "קרם הגנה SPF 50": 8, "שמפו הד אנד שולדרס": 18, "מטרייה מתקפלת": 30},
+        "prices": {"חלב תנובה 3%": 7, "קרם הגנה SPF 50": 38, "שמפו הד אנד שולדרס": 24, "מטרייה מתקפלת": 45},
+        "sales_base": [("חלב תנובה 3%", 85), ("קרם הגנה SPF 50", 9), ("שמפו הד אנד שולדרס", 11)],
+        "growth": 0.10,
+        "analysis": {
+            "dead_products": [
+                {"name": "מטרייה מתקפלת", "stock": 30, "days_no_sale": 95,
+                 "current_price": 45, "recommended_price": 32,
+                 "reason": "מחוץ לעונה — 95 יום ללא מכירה"},
+            ],
+            "hot_products": [
+                {"name": "חלב תנובה 3%", "weekly_sales": 195, "stock": 55,
+                 "days_until_empty": 2, "order_quantity": 200, "supplier": "תנובה"},
+                {"name": "קרם הגנה SPF 50", "weekly_sales": 21, "stock": 8,
+                 "days_until_empty": 3, "order_quantity": 40, "supplier": "ניאוטרוגינה"},
+                {"name": "שמפו הד אנד שולדרס", "weekly_sales": 25, "stock": 18,
+                 "days_until_empty": 5, "order_quantity": 60, "supplier": "P&G"},
+            ],
+            "total_potential_savings": 2340,
+            "summary_he": "החלב נגמר בעוד יומיים. קרם הגנה חסר — יש עודף בכהן פארם ברשת.",
+        },
+    },
+    "demo_makolet": {
+        "name": "מכולת הרצל",
+        "phone": "0503456789",
+        "active": True,
+        "demo": True,
+        "stock": {"חלב תנובה 3%": 30, "ממתקי פורים": 80},
+        "prices": {"חלב תנובה 3%": 7, "ממתקי פורים": 15},
+        "sales_base": [("חלב תנובה 3%", 38)],
+        "growth": -0.10,
+        "analysis": {
+            "dead_products": [
+                {"name": "ממתקי פורים", "stock": 80, "days_no_sale": 140,
+                 "current_price": 15, "recommended_price": 9,
+                 "reason": "החג עבר לפני חודשים — נזילות תקועה"},
+            ],
+            "hot_products": [
+                {"name": "חלב תנובה 3%", "weekly_sales": 88, "stock": 30,
+                 "days_until_empty": 3, "order_quantity": 90, "supplier": "תנובה"},
+            ],
+            "total_potential_savings": 1200,
+            "summary_he": "מכירות בירידה קלה. ממתקי פורים תקועים 140 יום.",
+        },
+    },
+}
+
+
+def build_demo_db(db):
+    """Adds (or refreshes) the demo stores. Never touches real stores."""
+    from datetime import datetime
+    now = datetime.now().isoformat()
+
+    db.setdefault("stores", {})
+    db.setdefault("recommendations", [])
+    db.setdefault("suppliers", {})
+
+    # drop previous demo rows so re-seeding stays idempotent
+    db["recommendations"] = [
+        r for r in db["recommendations"] if r.get("store_id") not in DEMO_STORES
+    ]
+
+    created = []
+    for sid, spec in DEMO_STORES.items():
+        db["stores"][sid] = {
+            "name": spec["name"],
+            "phone": spec["phone"],
+            "active": True,
+            "demo": True,
+            "stock": spec["stock"],
+            "prices": spec["prices"],
+            "sales_csv": _demo_sales_csv(spec["sales_base"], 6, spec["growth"]),
+        }
+        db["recommendations"].append({
+            "store_id": sid,
+            "created": now,
+            "analysis": spec["analysis"],
+        })
+        created.append({"store_id": sid, "name": spec["name"]})
+
+    return created
+
+
+@app.route("/admin/seed-demo", methods=["POST"])
+def seed_demo():
+    """
+    Populates three demo stores so the network screens have something
+    real to render. Idempotent, and leaves real stores untouched.
+    """
+    db = load_db()
+    created = build_demo_db(db)
+    save_db(db)
+    return jsonify({
+        "seeded": created,
+        "total_stores": len(db.get("stores", {})),
+    })
+
+
+@app.route("/admin/seed-demo", methods=["DELETE"])
+def remove_demo():
+    """Removes every demo store and its recommendations."""
+    db = load_db()
+    removed = [sid for sid in list(db.get("stores", {})) if sid in DEMO_STORES]
+    for sid in removed:
+        db["stores"].pop(sid, None)
+    db["recommendations"] = [
+        r for r in db.get("recommendations", []) if r.get("store_id") not in DEMO_STORES
+    ]
+    save_db(db)
+    return jsonify({"removed": removed, "total_stores": len(db.get("stores", {}))})
+
+
+@app.route("/forecast/<store_id>", methods=["GET"])
+def forecast_saved(store_id):
+    """Forecast from the sales data already saved on the store."""
+    db = load_db()
+    store = db.get("stores", {}).get(store_id)
+    if not store:
+        return jsonify({"error": "store not found"}), 404
+    csv_text = store.get("sales_csv")
+    if not csv_text:
+        return jsonify({"error": "no saved sales data for this store"}), 404
+    results = forecast_all(csv_text, store.get("stock", {}), 3)
+    urgent = [r for r in results if r["reorder_now"]]
+    return jsonify({
+        "store_id": store_id,
+        "store_name": store.get("name"),
+        "forecasts": results,
+        "urgent_count": len(urgent),
+        "total_products": len(results),
+    })
+
+
+@app.route("/lending/<store_id>", methods=["GET"])
+def lending_saved(store_id):
+    """Credit profile from the sales data already saved on the store."""
+    db = load_db()
+    store = db.get("stores", {}).get(store_id)
+    if not store:
+        return jsonify({"error": "store not found"}), 404
+    csv_text = store.get("sales_csv")
+    if not csv_text:
+        return jsonify({"error": "no saved sales data for this store"}), 404
+    profile = calculate_credit_profile(csv_text, store.get("prices", {}))
+    profile["store_id"] = store_id
+    profile["store_name"] = store.get("name")
+    return jsonify(profile)
+
 
 if __name__ == "__main__":
     print("=" * 50)
