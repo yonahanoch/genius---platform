@@ -1271,6 +1271,275 @@ def store_state(store_id):
         "has_analysis": latest is not None,
     })
 
+# ===========================================
+# מבנה אחיד (BKMVDATA) — התקן שכל מערכת בישראל חייבת לייצא
+# מפרט: רשות המסים, הוראה 131
+# ===========================================
+
+# (field, start_1indexed, length)
+BKMV_C100 = [
+    ("doc_type", 23, 3), ("doc_number", 26, 20), ("issue_date", 46, 8),
+    ("customer_name", 58, 50), ("total_before_discount", 288, 15),
+    ("vat", 333, 15), ("total_with_vat", 348, 15),
+    ("cancelled", 400, 1), ("doc_date", 401, 8),
+]
+BKMV_D110 = [
+    ("doc_type", 23, 3), ("doc_number", 26, 20), ("line_number", 46, 4),
+    ("sku", 74, 20), ("description", 94, 30), ("unit", 204, 20),
+    ("quantity", 224, 17), ("unit_price", 241, 15),
+    ("line_discount", 256, 15), ("line_total", 271, 15),
+    ("doc_date", 297, 8),
+]
+BKMV_M100 = [
+    ("universal_id", 23, 20), ("supplier_sku", 43, 20), ("sku", 63, 20),
+    ("name", 83, 50), ("unit", 173, 20),
+    ("opening_balance", 193, 12), ("receipts", 205, 12),
+    ("disbursements", 217, 12), ("cost", 229, 10),
+]
+BKMV_Z900 = [("total_records", 1155 - 1000, 15)]  # position resolved below
+
+# document types that represent a sale to a customer.
+# Israeli spec groups these in the 300/400 ranges; tune per real file.
+BKMV_SALES_DOCS = {"305", "320", "330", "300", "400"}
+BKMV_CREDIT_DOCS = {"330"}  # credit notes reverse a sale
+
+
+def _bkmv_decode(raw):
+    """BKMVDATA is single-byte Hebrew: ISO-8859-8 on Windows, CP862 on DOS."""
+    if isinstance(raw, str):
+        return raw.encode("iso8859-8", errors="replace")
+    return raw
+
+
+def _bkmv_field(line_bytes, start, length):
+    """start is 1-indexed per the spec."""
+    chunk = line_bytes[start - 1:start - 1 + length]
+    for enc in ("iso8859-8", "cp862", "utf-8"):
+        try:
+            return chunk.decode(enc).strip().strip("!")
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return chunk.decode("latin-1", errors="replace").strip()
+
+
+def _bkmv_num(s, decimals=2):
+    """
+    Spec writes amounts as X9(12)V99 — implicit decimal point, optional sign.
+    '000000000012550' with 2 decimals -> 125.50
+    """
+    if not s:
+        return 0.0
+    s = s.strip().replace("!", "")
+    if not s:
+        return 0.0
+    sign = 1.0
+    if s[0] in "+-":
+        sign = -1.0 if s[0] == "-" else 1.0
+        s = s[1:]
+    s = s.strip() or "0"
+    if not s.lstrip("0").isdigit() and s.lstrip("0") != "":
+        digits = "".join(c for c in s if c.isdigit())
+        if not digits:
+            return 0.0
+        s = digits
+    try:
+        return sign * (int(s or "0") / (10 ** decimals))
+    except ValueError:
+        return 0.0
+
+
+def _bkmv_date(s):
+    from datetime import datetime
+    s = (s or "").strip()
+    if len(s) != 8 or not s.isdigit():
+        return None
+    try:
+        return datetime.strptime(s, "%Y%m%d")
+    except ValueError:
+        return None
+
+
+def parse_bkmv(content):
+    """
+    Reads a BKMVDATA file and returns its documents, line items and
+    inventory records, plus a self-check against the Z900 record count.
+    """
+    data = _bkmv_decode(content)
+    lines = [l for l in data.replace(b"\r\n", b"\n").split(b"\n") if l.strip()]
+
+    docs, items, stock_rows = [], [], []
+    doc_type_counts = {}
+    declared_total = None
+    seen = 0
+
+    for lb in lines:
+        code = _bkmv_field(lb, 1, 4)
+        seen += 1
+        if code == "100C":
+            rec = {k: _bkmv_field(lb, s, n) for k, s, n in BKMV_C100}
+            rec["total_with_vat"] = _bkmv_num(rec["total_with_vat"])
+            rec["vat"] = _bkmv_num(rec["vat"])
+            rec["date"] = _bkmv_date(rec["doc_date"]) or _bkmv_date(rec["issue_date"])
+            docs.append(rec)
+            dt = rec["doc_type"]
+            doc_type_counts[dt] = doc_type_counts.get(dt, 0) + 1
+        elif code == "110D":
+            rec = {k: _bkmv_field(lb, s, n) for k, s, n in BKMV_D110}
+            rec["quantity"] = _bkmv_num(rec["quantity"], 4)
+            rec["unit_price"] = _bkmv_num(rec["unit_price"])
+            rec["line_discount"] = _bkmv_num(rec["line_discount"])
+            rec["line_total"] = _bkmv_num(rec["line_total"])
+            rec["date"] = _bkmv_date(rec["doc_date"])
+            items.append(rec)
+        elif code == "100M":
+            rec = {k: _bkmv_field(lb, s, n) for k, s, n in BKMV_M100}
+            rec["opening_balance"] = _bkmv_num(rec["opening_balance"])
+            rec["receipts"] = _bkmv_num(rec["receipts"])
+            rec["disbursements"] = _bkmv_num(rec["disbursements"])
+            rec["cost"] = _bkmv_num(rec["cost"])
+            rec["on_hand"] = rec["opening_balance"] + rec["receipts"] - rec["disbursements"]
+            stock_rows.append(rec)
+        elif code == "900Z":
+            declared_total = _bkmv_num(_bkmv_field(lb, 20, 15), 0)
+
+    return {
+        "documents": docs,
+        "lines": items,
+        "inventory": stock_rows,
+        "doc_type_counts": doc_type_counts,
+        "records_seen": seen,
+        "records_declared": int(declared_total) if declared_total else None,
+        "count_matches": (declared_total is None) or int(declared_total) == seen,
+    }
+
+
+def bkmv_to_store_data(parsed, sales_doc_types=None):
+    """
+    Turns a parsed BKMVDATA file into the three things the rest of the
+    system already speaks: a sales CSV, a stock map and a price map.
+    """
+    allowed = sales_doc_types if sales_doc_types is not None else BKMV_SALES_DOCS
+
+    rows = ["date,product,qty"]
+    prices, seen_dates = {}, 0
+    for ln in parsed.get("lines", []):
+        if allowed and ln.get("doc_type") not in allowed:
+            continue
+        name = (ln.get("description") or ln.get("sku") or "").strip()
+        if not name:
+            continue
+        d = ln.get("date")
+        if d is None:
+            continue
+        qty = ln.get("quantity", 0)
+        if ln.get("doc_type") in BKMV_CREDIT_DOCS:
+            qty = -abs(qty)
+        if qty == 0:
+            continue
+        rows.append("%04d-%02d-%02d,%s,%s" % (d.year, d.month, d.day, name, qty))
+        seen_dates += 1
+        up = ln.get("unit_price", 0)
+        if up > 0 and name not in prices:
+            prices[name] = round(up, 2)
+
+    stock = {}
+    for it in parsed.get("inventory", []):
+        name = (it.get("name") or it.get("sku") or "").strip()
+        if not name:
+            continue
+        stock[name] = int(round(it.get("on_hand", 0)))
+        if it.get("cost", 0) > 0 and name not in prices:
+            prices[name] = round(it["cost"], 2)
+
+    return {
+        "sales_csv": "\n".join(rows),
+        "stock": stock,
+        "prices": prices,
+        "sale_lines_used": seen_dates,
+    }
+
+@app.route("/import/bkmv/<store_id>", methods=["POST"])
+def import_bkmv(store_id):
+    """
+    Loads a Tax Authority uniform-format file (BKMVDATA) into a store.
+
+    Accepts either a multipart upload (field name "file") or the raw file
+    as the request body. Pass ?preview=1 to inspect a file without saving.
+    """
+    # Touching request.files consumes the stream, so decide by content type
+    # first — otherwise a raw-body upload arrives empty.
+    raw = None
+    ctype = (request.content_type or "").lower()
+    if ctype.startswith("multipart/form-data"):
+        f = request.files.get("file") or next(iter(request.files.values()), None)
+        if f:
+            raw = f.read()
+    else:
+        raw = request.get_data(cache=False) or b""
+        if not raw and request.form:
+            # some clients send the body form-encoded; take the first value
+            raw = next(iter(request.form.values()), "").encode("utf-8", "replace")
+    if not raw:
+        return jsonify({"error": "no file received"}), 400
+
+    try:
+        parsed = parse_bkmv(raw)
+    except Exception as e:
+        return jsonify({"error": "could not read file: " + str(e)}), 400
+
+    if not parsed["documents"] and not parsed["lines"] and not parsed["inventory"]:
+        return jsonify({
+            "error": "no BKMVDATA records found — is this the right file?",
+            "records_seen": parsed["records_seen"],
+        }), 400
+
+    types_param = request.args.get("doc_types")
+    allowed = set(t.strip() for t in types_param.split(",")) if types_param else None
+    converted = bkmv_to_store_data(parsed, allowed)
+
+    summary = {
+        "store_id": store_id,
+        "records_seen": parsed["records_seen"],
+        "records_declared": parsed["records_declared"],
+        "count_matches": parsed["count_matches"],
+        "documents": len(parsed["documents"]),
+        "line_items": len(parsed["lines"]),
+        "inventory_items": len(parsed["inventory"]),
+        "doc_type_counts": parsed["doc_type_counts"],
+        "sale_lines_used": converted["sale_lines_used"],
+        "products_with_stock": len(converted["stock"]),
+        "products_with_price": len(converted["prices"]),
+    }
+
+    if request.args.get("preview"):
+        summary["preview"] = True
+        summary["sample_csv"] = "\n".join(converted["sales_csv"].split("\n")[:11])
+        return jsonify(summary)
+
+    if converted["sale_lines_used"] == 0 and not converted["stock"]:
+        summary["error"] = ("file parsed but held no usable sales or stock — "
+                            "check doc_type_counts and pass ?doc_types=")
+        return jsonify(summary), 422
+
+    db = load_db()
+    store = db.setdefault("stores", {}).setdefault(store_id, {
+        "name": store_id, "phone": "", "active": True,
+    })
+    store["sales_csv"] = converted["sales_csv"]
+    if converted["stock"]:
+        store["stock"] = converted["stock"]
+    if converted["prices"]:
+        merged = dict(store.get("prices") or {})
+        merged.update(converted["prices"])
+        store["prices"] = merged
+    store["data_source"] = "bkmv"
+    store["imported_at"] = datetime.now().isoformat()
+    save_db(db)
+
+    summary["saved"] = True
+    summary["store_name"] = store.get("name")
+    return jsonify(summary)
+
 
 if __name__ == "__main__":
     print("=" * 50)
