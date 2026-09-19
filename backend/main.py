@@ -970,7 +970,7 @@ def _demo_sales_csv(base, months=6, growth=0):
     rows = ["date,product,qty"]
     for i in range(months):
         month = 3 + i
-        for day in (5, 15, 25):
+        for day in (2, 4, 7, 9, 11, 14, 16, 18, 21, 23, 25, 28):
             for name, qty in base:
                 q = int(qty * (1 + growth * i))
                 rows.append("2026-%02d-%02d,%s,%d" % (month, day, name, max(1, q)))
@@ -983,9 +983,11 @@ DEMO_STORES = {
         "phone": "0501234567",
         "active": True,
         "demo": True,
-        "stock": {"חלב תנובה 3%": 40, "שמפו הד אנד שולדרס": 25, "קרם הגנה SPF 50": 45},
-        "prices": {"חלב תנובה 3%": 7, "שמפו הד אנד שולדרס": 24, "קרם הגנה SPF 50": 38},
-        "sales_base": [("חלב תנובה 3%", 60), ("שמפו הד אנד שולדרס", 14)],
+        "stock": {"חלב תנובה 3%": 40, "שמפו הד אנד שולדרס": 25, "קרם הגנה SPF 50": 45, "לחם אחיד": 60, "ביצים L (12)": 90, "קוטג' 5%": 75, "קפה עלית 200g": 40, "נייר טואלט 32": 25, "שמן קנולה 1ל": 55, "גבינה צהובה 28%": 48, "סוכר 1ק\"ג": 70},
+        "prices": {"חלב תנובה 3%": 7, "שמפו הד אנד שולדרס": 24, "קרם הגנה SPF 50": 38, "לחם אחיד": 7, "ביצים L (12)": 14, "קוטג' 5%": 6, "קפה עלית 200g": 23, "נייר טואלט 32": 39, "שמן קנולה 1ל": 12, "גבינה צהובה 28%": 32, "סוכר 1ק\"ג": 6},
+        "sales_base": [("חלב תנובה 3%", 20), ("שמפו הד אנד שולדרס", 5),
+                        ("לחם אחיד", 45), ("ביצים L (12)", 30), ("קוטג' 5%", 38),
+                        ("קפה עלית 200g", 12), ("נייר טואלט 32", 9), ("שמן קנולה 1ל", 16)],
         "growth": 0.06,
         "analysis": {
             "dead_products": [
@@ -1008,9 +1010,12 @@ DEMO_STORES = {
         "phone": "0502345678",
         "active": True,
         "demo": True,
-        "stock": {"חלב תנובה 3%": 55, "קרם הגנה SPF 50": 8, "שמפו הד אנד שולדרס": 18, "מטרייה מתקפלת": 30},
-        "prices": {"חלב תנובה 3%": 7, "קרם הגנה SPF 50": 38, "שמפו הד אנד שולדרס": 24, "מטרייה מתקפלת": 45},
-        "sales_base": [("חלב תנובה 3%", 85), ("קרם הגנה SPF 50", 9), ("שמפו הד אנד שולדרס", 11)],
+        "stock": {"חלב תנובה 3%": 55, "קרם הגנה SPF 50": 8, "שמפו הד אנד שולדרס": 18, "מטרייה מתקפלת": 30, "לחם אחיד": 60, "ביצים L (12)": 90, "קוטג' 5%": 75, "קפה עלית 200g": 40, "נייר טואלט 32": 25, "שמן קנולה 1ל": 55, "גבינה צהובה 28%": 48, "סוכר 1ק\"ג": 70},
+        "prices": {"חלב תנובה 3%": 7, "קרם הגנה SPF 50": 38, "שמפו הד אנד שולדרס": 24, "מטרייה מתקפלת": 45, "לחם אחיד": 7, "ביצים L (12)": 14, "קוטג' 5%": 6, "קפה עלית 200g": 23, "נייר טואלט 32": 39, "שמן קנולה 1ל": 12, "גבינה צהובה 28%": 32, "סוכר 1ק\"ג": 6},
+        "sales_base": [("חלב תנובה 3%", 28), ("קרם הגנה SPF 50", 3), ("שמפו הד אנד שולדרס", 4),
+                        ("לחם אחיד", 70), ("ביצים L (12)", 52), ("קוטג' 5%", 61),
+                        ("קפה עלית 200g", 22), ("נייר טואלט 32", 17), ("שמן קנולה 1ל", 26),
+                        ("גבינה צהובה 28%", 33), ("סוכר 1ק\"ג", 19)],
         "growth": 0.10,
         "analysis": {
             "dead_products": [
@@ -1035,9 +1040,11 @@ DEMO_STORES = {
         "phone": "0503456789",
         "active": True,
         "demo": True,
-        "stock": {"חלב תנובה 3%": 30, "ממתקי פורים": 80},
-        "prices": {"חלב תנובה 3%": 7, "ממתקי פורים": 15},
-        "sales_base": [("חלב תנובה 3%", 38)],
+        "stock": {"חלב תנובה 3%": 30, "ממתקי פורים": 80, "לחם אחיד": 60, "ביצים L (12)": 90, "קוטג' 5%": 75, "קפה עלית 200g": 40, "נייר טואלט 32": 25, "שמן קנולה 1ל": 55, "גבינה צהובה 28%": 48, "סוכר 1ק\"ג": 70},
+        "prices": {"חלב תנובה 3%": 7, "ממתקי פורים": 15, "לחם אחיד": 7, "ביצים L (12)": 14, "קוטג' 5%": 6, "קפה עלית 200g": 23, "נייר טואלט 32": 39, "שמן קנולה 1ל": 12, "גבינה צהובה 28%": 32, "סוכר 1ק\"ג": 6},
+        "sales_base": [("חלב תנובה 3%", 13),
+                        ("לחם אחיד", 24), ("ביצים L (12)", 15), ("קוטג' 5%", 18),
+                        ("קפה עלית 200g", 6), ("שמן קנולה 1ל", 8)],
         "growth": -0.10,
         "analysis": {
             "dead_products": [
@@ -1155,6 +1162,111 @@ def lending_saved(store_id):
     profile["store_id"] = store_id
     profile["store_name"] = store.get("name")
     return jsonify(profile)
+
+@app.route("/store/<store_id>", methods=["GET"])
+def store_state(store_id):
+    """
+    Everything the store's own screens need: latest analysis, weekly
+    revenue and a unified product list with status and recommendation.
+    """
+    db = load_db()
+    store = db.get("stores", {}).get(store_id)
+    if not store:
+        return jsonify({"error": "store not found"}), 404
+
+    # latest analysis for this store
+    latest = None
+    for rec in db.get("recommendations", []):
+        if rec.get("store_id") != store_id:
+            continue
+        if latest is None or rec.get("created", "") > latest.get("created", ""):
+            latest = rec
+    analysis = (latest or {}).get("analysis") or {}
+
+    dead = analysis.get("dead_products", []) or []
+    hot = analysis.get("hot_products", []) or []
+    prices = store.get("prices", {}) or {}
+    stock = store.get("stock", {}) or {}
+
+    # weekly revenue, and per-product weekly units, from the saved history
+    weekly_sales = 0
+    per_product_weekly = {}
+    csv_text = store.get("sales_csv")
+    if csv_text:
+        try:
+            sales = parse_sales_csv(csv_text)
+            monthly = monthly_revenue_from_sales(sales, prices)
+            if monthly:
+                months = sorted(monthly.keys())
+                weekly_sales = int(round(monthly[months[-1]] / 4.33))
+                last = months[-1]
+                for name, history in sales.items():
+                    units = sum(
+                        q for d, q in history
+                        if d is not None and ("%04d-%02d" % (d.year, d.month)) == last
+                    )
+                    per_product_weekly[name] = int(round(units / 4.33))
+        except Exception:
+            weekly_sales = 0
+            per_product_weekly = {}
+
+    # one product list the table can render directly
+    products = []
+    for p in hot:
+        name = p.get("name")
+        products.append({
+            "name": name,
+            "stock": p.get("stock", stock.get(name, 0)),
+            "weekly_sales": p.get("weekly_sales", 0),
+            "price": prices.get(name),
+            "status": "hot",
+            "action": "הגדל מלאי" if p.get("order_quantity", 0) > 0 else None,
+            "order_quantity": p.get("order_quantity", 0),
+            "days_until_empty": p.get("days_until_empty"),
+        })
+    for p in dead:
+        name = p.get("name")
+        rec_price = p.get("recommended_price")
+        products.append({
+            "name": name,
+            "stock": p.get("stock", stock.get(name, 0)),
+            "weekly_sales": 0,
+            "price": p.get("current_price", prices.get(name)),
+            "status": "dead",
+            "action": ("הורד ל-₪" + str(rec_price)) if rec_price else "שקול הנחה",
+            "recommended_price": rec_price,
+            "days_no_sale": p.get("days_no_sale"),
+        })
+
+    # anything the store stocks that the analysis did not flag
+    flagged = {p["name"] for p in products}
+    for name, qty in stock.items():
+        if name in flagged:
+            continue
+        products.append({
+            "name": name,
+            "stock": qty,
+            "weekly_sales": per_product_weekly.get(name, 0),
+            "price": prices.get(name),
+            "status": "stable",
+            "action": None,
+        })
+
+    alerts = len(dead) + len([p for p in hot if p.get("order_quantity", 0) > 0])
+
+    return jsonify({
+        "store_id": store_id,
+        "store_name": store.get("name"),
+        "weekly_sales": weekly_sales,
+        "product_count": len(products),
+        "alerts": alerts,
+        "potential_savings": analysis.get("total_potential_savings", 0),
+        "summary_he": analysis.get("summary_he", ""),
+        "dead_products": dead,
+        "hot_products": hot,
+        "products": products,
+        "has_analysis": latest is not None,
+    })
 
 
 if __name__ == "__main__":

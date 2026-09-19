@@ -659,76 +659,14 @@ select.fi { cursor: pointer; }
 
       <!-- ═══ STORE: Overview ═══ -->
       <div class="sc on" id="sc-overview">
-        <div class="metrics">
-          <div class="mc"><div class="ml">מכירות השבוע</div><div class="mv">₪18,400</div><div class="ms">↑ +7% ממוצע</div></div>
-          <div class="mc"><div class="ml">מוצרים פעילים</div><div class="mv">47</div><div class="ms">3 דורשים תשומת לב</div></div>
-          <div class="mc"><div class="ml">חיסכון החודש</div><div class="mv">₪3,200</div><div class="ms">↑ הכי גבוה ברשת</div></div>
-          <div class="mc"><div class="ml">התראות פתוחות</div><div class="mv">2</div><div class="ms red">ממתינות לפעולה</div></div>
-        </div>
-
-        <div class="sec">המלצות הסוכן</div>
-
-        <div class="ai-row">
-          <div class="aico w"><i class="ti ti-trending-down"></i></div>
-          <div style="flex:1">
-            <div class="at">שמפו Kerastase — 67 ימים ללא מכירה</div>
-            <div class="ad">23 יח' במלאי. הסוכן ממליץ: הורד ל-₪68 → צפי מכירה תוך 5 ימים</div>
-          </div>
-          <div style="flex-shrink:0"><button class="btn btnp">אשר הורדת מחיר</button></div>
-        </div>
-
-        <div class="ai-row">
-          <div class="aico g"><i class="ti ti-trending-up"></i></div>
-          <div style="flex:1">
-            <div class="at">קרם SPF 50 — מלאי נגמר בעוד 5 ימים</div>
-            <div class="ad">28 מכירות/שבוע. הסוכן ממליץ: הזמן 50 יח' מיד</div>
-          </div>
-          <div style="flex-shrink:0"><button class="btn btnp">הזמן מלאי</button></div>
-        </div>
-
-        <div class="ai-row">
-          <div class="aico b"><i class="ti ti-arrows-exchange"></i></div>
-          <div style="flex:1">
-            <div class="at">הזדמנות רשת — לוטיון ידיים</div>
-            <div class="ad">חנות לוי מציעה 30 יח' ב-₪12/יח'. מחיר הספק שלך: ₪15</div>
-          </div>
-          <div style="flex-shrink:0"><button class="btn" onclick="show('network')">פרטים</button></div>
+        <div id="overview-body">
+          <div class="net-card"><div class="net-sub">טוען את נתוני החנות…</div></div>
         </div>
       </div>
-
-      <!-- ═══ STORE: Products ═══ -->
       <div class="sc" id="sc-products">
-        <div style="display:flex;gap:8px;margin-bottom:14px">
-          <input class="fi" style="flex:1" placeholder="חפש מוצר...">
-          <select class="fi" style="width:140px">
-            <option>כל הסטטוסים</option>
-            <option>חם</option>
-            <option>מת</option>
-            <option>נמוך</option>
-          </select>
+        <div id="products-body">
+          <div class="net-card"><div class="net-sub">טוען מוצרים…</div></div>
         </div>
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th style="width:35%">מוצר</th>
-              <th style="width:12%">מלאי</th>
-              <th style="width:16%">מכירות/שבוע</th>
-              <th style="width:12%">מחיר</th>
-              <th style="width:13%">סטטוס</th>
-              <th style="width:12%">המלצה</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td>קרם SPF 50</td><td>12</td><td>28</td><td>₪45</td><td><span class="pill g"><span class="dot"></span>חם</span></td><td><span class="pill b">הגדל מלאי</span></td></tr>
-            <tr><td>ג'ל שיניים X3</td><td>34</td><td>19</td><td>₪22</td><td><span class="pill g"><span class="dot"></span>יציב</span></td><td>—</td></tr>
-            <tr><td>שמפו Kerastase</td><td>23</td><td>0</td><td>₪95</td><td><span class="pill r"><span class="dot"></span>מת</span></td><td><span class="pill a">הורד ל-₪68</span></td></tr>
-            <tr><td>לק אורכידאה</td><td>8</td><td>2</td><td>₪35</td><td><span class="pill a"><span class="dot"></span>נמוך</span></td><td><span class="pill a">שקול הנחה</span></td></tr>
-            <tr><td>קרם לחות Q10</td><td>55</td><td>12</td><td>₪62</td><td><span class="pill g"><span class="dot"></span>יציב</span></td><td>—</td></tr>
-            <tr><td>מסכה שיער</td><td>4</td><td>6</td><td>₪48</td><td><span class="pill a"><span class="dot"></span>מלאי נמוך</span></td><td><span class="pill b">הזמן מלאי</span></td></tr>
-            <tr><td>תחליב גוף Nivea</td><td>18</td><td>9</td><td>₪28</td><td><span class="pill g"><span class="dot"></span>יציב</span></td><td>—</td></tr>
-            <tr><td>סרום ויטמין C</td><td>7</td><td>14</td><td>₪89</td><td><span class="pill g"><span class="dot"></span>חם</span></td><td><span class="pill b">הגדל מלאי</span></td></tr>
-          </tbody>
-        </table>
       </div>
 
       <!-- ═══ STORE: Trends ═══ -->
@@ -1523,6 +1461,128 @@ async function notifyTransfer(idx) {
   }
 }
 
+// ═══ Overview + Products — live from /store/<id> ═══
+let __gxStoreCache = null;
+
+async function gxLoadStore(force) {
+  if (__gxStoreCache && !force) return __gxStoreCache;
+  const res = await fetch(gxApi() + '/store/' + encodeURIComponent(gxStore()));
+  const d = await res.json();
+  if (!res.ok) throw new Error(d.error || 'HTTP ' + res.status);
+  __gxStoreCache = d;
+  return d;
+}
+
+function gxMoney(n) {
+  return '₪' + Number(n || 0).toLocaleString('he-IL');
+}
+
+async function loadOverview() {
+  const box = document.getElementById('overview-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">טוען את נתוני החנות…</div></div>';
+  let d;
+  try { d = await gxLoadStore(true); }
+  catch (e) { gxErr(box, 'loadOverview'); return; }
+
+  if (!d.has_analysis) {
+    box.innerHTML = '<div class="net-card">' +
+      '<div class="net-title">עוד אין ניתוח לחנות</div>' +
+      '<div class="net-sub">העלה קובץ מכירות והסוכן ינתח אותו — ההמלצות יופיעו כאן.</div>' +
+      '</div>';
+    return;
+  }
+
+  const metrics = '<div class="metrics">' +
+    '<div class="mc"><div class="ml">מכירות השבוע</div><div class="mv">' + gxMoney(d.weekly_sales) +
+      '</div><div class="ms">' + gxEsc(d.store_name || '') + '</div></div>' +
+    '<div class="mc"><div class="ml">מוצרים במעקב</div><div class="mv">' + d.product_count +
+      '</div><div class="ms">' + d.alerts + ' דורשים תשומת לב</div></div>' +
+    '<div class="mc"><div class="ml">חיסכון פוטנציאלי</div><div class="mv">' +
+      gxMoney(d.potential_savings) + '</div><div class="ms">לפי המלצות הסוכן</div></div>' +
+    '<div class="mc"><div class="ml">התראות פתוחות</div><div class="mv">' + d.alerts +
+      '</div><div class="ms' + (d.alerts ? ' red' : '') + '">' +
+      (d.alerts ? 'ממתינות לפעולה' : 'הכל תקין') + '</div></div>' +
+    '</div>';
+
+  const summary = d.summary_he
+    ? '<div class="net-card" style="margin-top:16px"><div class="net-sub">' +
+      gxEsc(d.summary_he) + '</div></div>'
+    : '';
+
+  const rows = [];
+  (d.dead_products || []).forEach(p => {
+    rows.push('<div class="ai-row">' +
+      '<div class="aico w"><i class="ti ti-trending-down"></i></div>' +
+      '<div style="flex:1">' +
+        '<div class="at">' + gxEsc(p.name) + ' — ' + (p.days_no_sale || 0) + ' ימים ללא מכירה</div>' +
+        '<div class="ad">' + (p.stock || 0) + " יח' במלאי. " +
+          (p.recommended_price
+            ? 'הסוכן ממליץ: הורד מ-' + gxMoney(p.current_price) + ' ל-' + gxMoney(p.recommended_price)
+            : gxEsc(p.reason || '')) + '</div>' +
+      '</div>' +
+      '<div style="flex-shrink:0"><button class="btn" onclick="show(\'products\')">פרטים</button></div>' +
+    '</div>');
+  });
+  (d.hot_products || []).filter(p => (p.order_quantity || 0) > 0).forEach(p => {
+    rows.push('<div class="ai-row">' +
+      '<div class="aico g"><i class="ti ti-trending-up"></i></div>' +
+      '<div style="flex:1">' +
+        '<div class="at">' + gxEsc(p.name) + ' — נגמר בעוד ' + (p.days_until_empty || 0) + ' ימים</div>' +
+        '<div class="ad">' + (p.weekly_sales || 0) + " מכירות/שבוע. הסוכן ממליץ: הזמן " +
+          p.order_quantity + " יח'" + (p.supplier ? ' מ' + gxEsc(p.supplier) : '') + '</div>' +
+      '</div>' +
+      '<div style="flex-shrink:0"><button class="btn" onclick="show(\'forecast\')">תחזית</button></div>' +
+    '</div>');
+  });
+
+  box.innerHTML = metrics + summary +
+    '<div class="sec" style="margin-top:20px">המלצות הסוכן</div>' +
+    (rows.length ? rows.join('') :
+      '<div class="net-card"><div class="net-sub">אין המלצות פתוחות כרגע.</div></div>');
+}
+
+async function loadProducts() {
+  const box = document.getElementById('products-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">טוען מוצרים…</div></div>';
+  let d;
+  try { d = await gxLoadStore(false); }
+  catch (e) { gxErr(box, 'loadProducts'); return; }
+
+  const list = d.products || [];
+  if (!list.length) {
+    box.innerHTML = '<div class="net-card"><div class="net-title">אין מוצרים</div>' +
+      '<div class="net-sub">העלה קובץ מכירות כדי לראות את המלאי שלך כאן.</div></div>';
+    return;
+  }
+  const pill = { hot: ['g','חם'], dead: ['r','מת'], stable: ['g','יציב'] };
+  const order = { dead: 0, hot: 1, stable: 2 };
+  const sorted = list.slice().sort((a,b) => (order[a.status]??3) - (order[b.status]??3));
+
+  const rows = sorted.map(p => {
+    const [cls, txt] = pill[p.status] || ['g','—'];
+    const act = p.action
+      ? '<span class="pill ' + (p.status === 'dead' ? 'a' : 'b') + '">' + gxEsc(p.action) + '</span>'
+      : '—';
+    return '<tr>' +
+      '<td>' + gxEsc(p.name) + '</td>' +
+      '<td>' + (p.stock ?? 0) + '</td>' +
+      '<td>' + (p.weekly_sales || 0) + '</td>' +
+      '<td>' + (p.price != null ? gxMoney(p.price) : '—') + '</td>' +
+      '<td><span class="pill ' + cls + '"><span class="dot"></span>' + txt + '</span></td>' +
+      '<td>' + act + '</td>' +
+    '</tr>';
+  }).join('');
+
+  box.innerHTML =
+    '<table class="tbl"><thead><tr>' +
+      '<th style="width:35%">מוצר</th><th style="width:12%">מלאי</th>' +
+      '<th style="width:16%">מכירות/שבוע</th><th style="width:12%">מחיר</th>' +
+      '<th style="width:13%">סטטוס</th><th style="width:12%">המלצה</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
 function show(id) {
   document.querySelectorAll('.sc').forEach(s => s.classList.remove('on'));
   const el = document.getElementById('sc-' + id);
@@ -1536,6 +1596,8 @@ function show(id) {
   });
   if (id === 'trends' && !chartsBuilt) { buildCharts(); chartsBuilt = true; }
   if (id === 'bulk') loadGroupBuying();
+  if (id === 'overview') loadOverview();
+  if (id === 'products') loadProducts();
   if (id === 'network') loadTransfers();
   if (id === 'forecast') loadForecast();
   if (id === 'lending') loadLending();
@@ -1738,6 +1800,8 @@ async function sendChat(role) {
       return null;
     }
   }
+
+document.addEventListener('DOMContentLoaded', () => loadOverview());
 </script>
 </body>
 </html>
