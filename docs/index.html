@@ -776,41 +776,8 @@ select.fi { cursor: pointer; }
       <!-- ═══ STORE: Network ═══ -->
       <div class="sc" id="sc-network">
         <div class="sec" style="margin-bottom:12px">הזדמנויות העברת מלאי ברשת</div>
-
-        <div class="net-card">
-          <div class="net-title">לוטיון ידיים Derma — 30 יחידות זמינות</div>
-          <div class="net-sub">חנות לוי בריאות, ירושלים • מחיר: ₪12/יח' (ספק שלך: ₪15) • חיסכון פוטנציאלי: ₪90</div>
-          <div class="net-row">
-            <span class="tag g">זמין עכשיו</span>
-            <button class="btn btnp">קנה מהרשת</button>
-          </div>
-        </div>
-
-        <div class="net-card">
-          <div class="net-title">שמפו Kerastase — 15 יחידות עודפות אצלך</div>
-          <div class="net-sub">3 חנויות ברשת מחפשות מוצר זה • מחיר מוצע: ₪78/יח' • רווח: ₪270</div>
-          <div class="net-row">
-            <span class="tag a">ביקוש גבוה</span>
-            <button class="btn btnp">מכור לרשת</button>
-          </div>
-        </div>
-
-        <div class="net-card">
-          <div class="net-title">קרם לחות Q10 — 20 יחידות זמינות</div>
-          <div class="net-sub">חנות שמיר פארם, חיפה • מחיר: ₪28/יח' (ספק שלך: ₪32) • חיסכון: ₪80</div>
-          <div class="net-row">
-            <span class="tag g">זמין עכשיו</span>
-            <button class="btn btnp">קנה מהרשת</button>
-          </div>
-        </div>
-
-        <div class="net-card">
-          <div class="net-title">סרום ויטמין C — ביקוש ב-4 חנויות</div>
-          <div class="net-sub">4 חנויות חסרות מלאי • אין עודף ברשת • מומלץ להזמין משותף</div>
-          <div class="net-row">
-            <span class="tag b">הזדמנות bulk</span>
-            <button class="btn" onclick="show('bulk')">הצטרף לקנייה משותפת</button>
-          </div>
+        <div id="network-list">
+          <div class="net-card"><div class="net-sub">מחפש הזדמנויות ברשת…</div></div>
         </div>
       </div>
 
@@ -1305,7 +1272,8 @@ async function loadGroupBuying() {
     return;
   }
 
-  box.innerHTML = opps.map(o => {
+  window.__gxGroups = opps;
+  box.innerHTML = opps.map((o, gi) => {
     const tier = bulkTierStyle(o.discount_tier);
     const next = bulkNextTier(o.total_quantity);
     const pct = next ? Math.min(100, Math.round(o.total_quantity / next.need * 100)) : 100;
@@ -1328,14 +1296,16 @@ async function loadGroupBuying() {
       '<div class="net-sub" style="margin-top:6px;font-size:11px">' + who + '</div>' +
       '<div class="net-row">' +
         '<span class="tag ' + tier.cls + '">' + bulkEsc(o.discount_tier) + '</span>' +
-        '<button class="btn btnp" onclick="notifyGroupBuy(\'' +
-          bulkEsc(o.product_name).replace(/'/g, "\\'") + '\')">שלח לכל המשתתפים</button>' +
+        '<button class="btn btnp" onclick="notifyGroupBuy(' + gi + ')">שלח לכל המשתתפים</button>' +
       '</div>' +
     '</div>';
   }).join('');
 }
 
-async function notifyGroupBuy(product) {
+async function notifyGroupBuy(gi) {
+  const g = (window.__gxGroups || [])[gi];
+  if (!g) { alert('שגיאה בנתונים'); return; }
+  const product = g.product_name;
   try {
     const res = await fetch((window.GENIUS_API_URL || 'http://localhost:8080') + '/network/group-buying/notify', {
       method: 'POST',
@@ -1480,6 +1450,79 @@ async function loadLending() {
     '<div class="net-card">' + bars + '</div>';
 }
 
+// ═══ Stock transfer — live from /network/transfer-opportunities ═══
+async function loadTransfers() {
+  const box = document.getElementById('network-list');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">מחפש הזדמנויות ברשת…</div></div>';
+
+  let data;
+  try {
+    const res = await fetch(gxApi() + '/network/transfer-opportunities');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  } catch (e) {
+    gxErr(box, 'loadTransfers');
+    return;
+  }
+
+  const opps = (data && data.opportunities) || [];
+  if (!opps.length) {
+    box.innerHTML = '<div class="net-card">' +
+      '<div class="net-title">אין הזדמנויות העברה כרגע</div>' +
+      '<div class="net-sub">כשמוצר יתקע בחנות אחת ויחסר באחרת, ההתאמה תופיע כאן אוטומטית.</div>' +
+      '<div class="net-row"><button class="btn" onclick="loadTransfers()">רענן</button></div>' +
+      '</div>';
+    return;
+  }
+
+  const me = gxStore();
+  window.__gxTransfers = opps;
+  box.innerHTML = opps.map((o, idx) => {
+    const selling = o.from_store_id === me;
+    const buying  = o.to_store_id === me;
+    let tagCls = 'b', tagTxt = 'ברשת';
+    if (selling) { tagCls = 'g'; tagTxt = 'יש לך עודף — אפשר למכור'; }
+    else if (buying) { tagCls = 'a'; tagTxt = 'חסר לך — אפשר לקנות'; }
+
+    const price = (o.suggested_price !== null && o.suggested_price !== undefined)
+      ? " · מחיר מוצע ₪" + o.suggested_price : '';
+    return '<div class="net-card">' +
+      '<div class="net-title">' + gxEsc(o.product_name) + ' — ' +
+        o.suggested_quantity + " יח' זמינות</div>" +
+      '<div class="net-sub">' + gxEsc(o.from_store_name) + ' → ' +
+        gxEsc(o.to_store_name) + price + '</div>' +
+      '<div class="net-sub" style="margin-top:6px;font-size:11px">' + gxEsc(o.reason) + '</div>' +
+      '<div class="net-row">' +
+        '<span class="tag ' + tagCls + '">' + tagTxt + '</span>' +
+        '<button class="btn btnp" onclick="notifyTransfer(' + idx + ')">' +
+          'שלח לשתי החנויות</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function notifyTransfer(idx) {
+  const o = (window.__gxTransfers || [])[idx];
+  if (!o) { alert('שגיאה בנתונים'); return; }
+  const body = {
+    from_store_id: o.from_store_id,
+    to_store_id: o.to_store_id,
+    product_name: o.product_name
+  };
+  try {
+    const res = await fetch(gxApi() + '/network/transfer-opportunities/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const d = await res.json();
+    alert(res.ok ? 'נשלחה הודעה לשתי החנויות' : (d.error || 'שליחה נכשלה'));
+  } catch (e) {
+    alert('אין חיבור לשרת');
+  }
+}
+
 function show(id) {
   document.querySelectorAll('.sc').forEach(s => s.classList.remove('on'));
   const el = document.getElementById('sc-' + id);
@@ -1493,6 +1536,7 @@ function show(id) {
   });
   if (id === 'trends' && !chartsBuilt) { buildCharts(); chartsBuilt = true; }
   if (id === 'bulk') loadGroupBuying();
+  if (id === 'network') loadTransfers();
   if (id === 'forecast') loadForecast();
   if (id === 'lending') loadLending();
 }

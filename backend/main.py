@@ -534,7 +534,8 @@ def find_transfer_opportunities(db):
                     qty = min(dp.get("stock", 0), hp.get("order_quantity", dp.get("stock", 0)))
                     if qty <= 0:
                         continue
-                    reason = sa.get("name") + " has stock, " + sb.get("name") + " needs it"
+                    reason = ("עודף אצל " + str(sa.get("name")) + " · מחסור אצל "
+                              + str(sb.get("name")))
                     opps.append({"product_name": dp.get("name"), "from_store_id": a, "from_store_name": sa.get("name"), "from_store_phone": sa.get("phone"), "to_store_id": b, "to_store_name": sb.get("name"), "to_store_phone": sb.get("phone"), "suggested_quantity": qty, "suggested_price": dp.get("recommended_price"), "reason": reason})
     return opps
 
