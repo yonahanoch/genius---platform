@@ -581,6 +581,7 @@ select.fi { cursor: pointer; }
 
 <!-- API configuration — change this to your Replit backend URL -->
 <script>
+  window.GENIUS_STORE_ID = "demo_pharm";
   window.GENIUS_API_URL = "https://0de27ba9-372e-4611-b4ea-c8e3d1c443bf-00-60gkhyoo71n6.sisko.replit.dev"; // TODO: replace with your live Replit backend URL
 </script>
 </head>
@@ -613,11 +614,13 @@ select.fi { cursor: pointer; }
       <div class="ni on" onclick="show('overview')"><i class="ti ti-home"></i> סקירה</div>
       <div class="ni" onclick="show('products')"><i class="ti ti-package"></i> מוצרים <span class="nb">2</span></div>
       <div class="ni" onclick="show('trends')"><i class="ti ti-chart-line"></i> גרפים וטרנדים</div>
+      <div class="ni" onclick="show('forecast')"><i class="ti ti-chart-arrows-vertical"></i> חיזוי ביקוש</div>
       <div class="ni" onclick="show('chat')"><i class="ti ti-robot"></i> סוכן AI</div>
       <div class="nav-sep">חוץ-חנות</div>
       <div class="ni" onclick="show('network')"><i class="ti ti-arrows-exchange"></i> העברת מלאי</div>
       <div class="ni" onclick="show('bulk')"><i class="ti ti-shopping-cart"></i> קנייה משותפת</div>
       <div class="ni" onclick="show('ads')"><i class="ti ti-speakerphone"></i> פרסום חכם</div>
+      <div class="ni" onclick="show('lending')"><i class="ti ti-cash"></i> מימון</div>
       <div class="nav-sep">חשבון</div>
       <div class="ni" onclick="show('settings')"><i class="ti ti-settings"></i> הגדרות</div>
     </nav>
@@ -808,6 +811,20 @@ select.fi { cursor: pointer; }
             <span class="tag b">הזדמנות bulk</span>
             <button class="btn" onclick="show('bulk')">הצטרף לקנייה משותפת</button>
           </div>
+        </div>
+      </div>
+
+      <!-- ═══ STORE: Forecast ═══ -->
+      <div class="sc" id="sc-forecast">
+        <div id="forecast-body">
+          <div class="net-card"><div class="net-sub">מחשב תחזית…</div></div>
+        </div>
+      </div>
+
+      <!-- ═══ STORE: Lending ═══ -->
+      <div class="sc" id="sc-lending">
+        <div id="lending-body">
+          <div class="net-card"><div class="net-sub">מחשב פרופיל אשראי…</div></div>
         </div>
       </div>
 
@@ -1232,7 +1249,7 @@ select.fi { cursor: pointer; }
 const screenTitles = {
   overview: 'סקירה — כהן פארם', products: 'מוצרים ומלאי', trends: 'גרפים וטרנדים',
   chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת',
-  ads: 'פרסום חכם', settings: 'הגדרות', dashboard: 'דאשבורד',
+  ads: 'פרסום חכם', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
   stores: 'ניהול חנויות', 'alerts-admin': 'התראות', onboard: 'צרף חנות חדשה',
   'admin-chat': 'סוכן AI — מנהל',
   'sup-dashboard': 'סקירה — יוניליוור ישראל', 'sup-orders': 'בקשות פתוחות',
@@ -1332,6 +1349,137 @@ async function notifyGroupBuy(product) {
   }
 }
 
+// ═══ Forecast + Lending — live from the API ═══
+function gxStore() { return window.GENIUS_STORE_ID || 'demo_pharm'; }
+function gxApi() { return window.GENIUS_API_URL || 'http://localhost:8080'; }
+function gxEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function gxErr(box, retry) {
+  box.innerHTML = '<div class="net-card">' +
+    '<div class="net-title">אין חיבור לשרת</div>' +
+    '<div class="net-sub">לא הצלחנו לטעון נתונים כרגע.</div>' +
+    '<div class="net-row"><button class="btn btnp" onclick="' + retry + '()">נסה שוב</button></div>' +
+    '</div>';
+}
+
+async function loadForecast() {
+  const box = document.getElementById('forecast-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">מחשב תחזית…</div></div>';
+  let d;
+  try {
+    const res = await fetch(gxApi() + '/forecast/' + encodeURIComponent(gxStore()));
+    d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'HTTP ' + res.status);
+  } catch (e) {
+    gxErr(box, 'loadForecast');
+    return;
+  }
+  const rows = d.forecasts || [];
+  if (!rows.length) {
+    box.innerHTML = '<div class="net-card"><div class="net-title">אין נתוני מכירות</div>' +
+      '<div class="net-sub">העלה קובץ מכירות כדי לקבל תחזית ביקוש.</div></div>';
+    return;
+  }
+  const trendTxt = { rising: 'במגמת עלייה', falling: 'במגמת ירידה', stable: 'יציב' };
+  const confTxt  = { high: 'ביטחון גבוה', medium: 'ביטחון בינוני', low: 'ביטחון נמוך' };
+
+  const metrics = '<div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">' +
+    '<div class="mc"><div class="ml">דורש הזמנה עכשיו</div><div class="mv">' + d.urgent_count +
+      '</div><div class="ms">מתוך ' + d.total_products + ' מוצרים</div></div>' +
+    '<div class="mc"><div class="ml">מוצרים במעקב</div><div class="mv">' + d.total_products +
+      '</div><div class="ms">' + gxEsc(d.store_name || '') + '</div></div>' +
+    '<div class="mc"><div class="ml">הקרוב להיגמר</div><div class="mv">' + rows[0].days_until_empty +
+      '</div><div class="ms">ימים — ' + gxEsc(rows[0].product_name) + '</div></div>' +
+    '</div>';
+
+  const cards = rows.map(r => {
+    const urgent = r.reorder_now;
+    const pct = Math.max(4, Math.min(100, Math.round(r.days_until_empty / 30 * 100)));
+    return '<div class="net-card">' +
+      '<div class="net-title">' + gxEsc(r.product_name) + '</div>' +
+      '<div class="net-sub">' + r.daily_rate + " יח' ביום · מלאי " + r.current_stock +
+        " · " + (trendTxt[r.trend] || r.trend) + ' · ' + (confTxt[r.confidence] || '') + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">נגמר בעוד ' +
+        r.days_until_empty + ' ימים</div>' +
+      '<div class="prog-bar"><div class="prog-fill' + (urgent ? ' amber' : '') +
+        '" style="width:' + pct + '%"></div></div>' +
+      '<div class="net-row">' +
+        '<span class="tag ' + (urgent ? 'a' : 'g') + '">' +
+          (urgent ? 'הזמן עכשיו' : 'מלאי תקין') + '</span>' +
+        (r.order_quantity > 0
+          ? '<span style="font-size:12px;color:var(--text2)">מומלץ להזמין <strong>' +
+            r.order_quantity + " יח'</strong></span>"
+          : '<span style="font-size:12px;color:var(--text3)">אין צורך להזמין</span>') +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  box.innerHTML = metrics + '<div class="sec" style="margin-bottom:12px">תחזית לפי דחיפות</div>' + cards;
+}
+
+async function loadLending() {
+  const box = document.getElementById('lending-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">מחשב פרופיל אשראי…</div></div>';
+  let d;
+  try {
+    const res = await fetch(gxApi() + '/lending/' + encodeURIComponent(gxStore()));
+    d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'HTTP ' + res.status);
+  } catch (e) {
+    gxErr(box, 'loadLending');
+    return;
+  }
+  if (!d.months_of_data) {
+    box.innerHTML = '<div class="net-card"><div class="net-title">אין מספיק נתונים</div>' +
+      '<div class="net-sub">נדרשת היסטוריית מכירות כדי לחשב פרופיל אשראי.</div></div>';
+    return;
+  }
+  const riskTxt  = { low: 'סיכון נמוך', medium: 'סיכון בינוני', high: 'סיכון גבוה', very_high: 'סיכון גבוה מאוד' };
+  const riskTag  = { low: 'g', medium: 'a', high: 'a', very_high: 'a' };
+  const trendTxt = { growing: 'בצמיחה', declining: 'בדעיכה', stable: 'יציב' };
+  const fill = d.score >= 75 ? '' : ' amber';
+
+  const metrics = '<div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">' +
+    '<div class="mc"><div class="ml">ציון אשראי</div><div class="mv">' + d.score +
+      '</div><div class="ms">' + (riskTxt[d.risk] || d.risk) + '</div></div>' +
+    '<div class="mc"><div class="ml">מחזור חודשי ממוצע</div><div class="mv">₪' +
+      Math.round(d.avg_monthly_revenue).toLocaleString('he-IL') +
+      '</div><div class="ms">' + (trendTxt[d.trend] || d.trend) + '</div></div>' +
+    '<div class="mc"><div class="ml">מסגרת אפשרית</div><div class="mv">₪' +
+      d.max_loan.toLocaleString('he-IL') + '</div><div class="ms">בהתבסס על הנתונים שלך</div></div>' +
+    '</div>';
+
+  const months = d.monthly_breakdown || {};
+  const keys = Object.keys(months).sort();
+  const max = Math.max(1, ...keys.map(k => months[k]));
+  const bars = keys.map(k =>
+    '<div style="margin-bottom:8px">' +
+      '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:3px">' +
+        '<span>' + k + '</span><span>₪' + Math.round(months[k]).toLocaleString('he-IL') + '</span></div>' +
+      '<div class="prog-bar"><div class="prog-fill" style="width:' +
+        Math.round(months[k] / max * 100) + '%"></div></div>' +
+    '</div>').join('');
+
+  box.innerHTML = metrics +
+    '<div class="net-card">' +
+      '<div class="net-title">' + gxEsc(d.store_name || '') + ' — פרופיל אשראי</div>' +
+      '<div class="net-sub">' + d.months_of_data + ' חודשי היסטוריה · תנודתיות ' +
+        d.volatility_pct + '% · ' + (trendTxt[d.trend] || d.trend) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">ציון ' + d.score + ' מתוך 100</div>' +
+      '<div class="prog-bar"><div class="prog-fill' + fill + '" style="width:' + d.score + '%"></div></div>' +
+      '<div class="net-row">' +
+        '<span class="tag ' + (riskTag[d.risk] || 'b') + '">' + (riskTxt[d.risk] || d.risk) + '</span>' +
+        '<span style="font-size:12px;color:var(--text2)">הציון מחושב מהמכירות שלך בלבד — בלי דירוג אשראי חיצוני</span>' +
+      '</div>' +
+    '</div>' +
+    '<div class="sec" style="margin:18px 0 12px">מחזור לפי חודש</div>' +
+    '<div class="net-card">' + bars + '</div>';
+}
+
 function show(id) {
   document.querySelectorAll('.sc').forEach(s => s.classList.remove('on'));
   const el = document.getElementById('sc-' + id);
@@ -1345,6 +1493,8 @@ function show(id) {
   });
   if (id === 'trends' && !chartsBuilt) { buildCharts(); chartsBuilt = true; }
   if (id === 'bulk') loadGroupBuying();
+  if (id === 'forecast') loadForecast();
+  if (id === 'lending') loadLending();
 }
 
 function switchRole(role) {
