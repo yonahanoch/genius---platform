@@ -1556,14 +1556,14 @@ async function loadProducts() {
       '<div class="net-sub">העלה קובץ מכירות כדי לראות את המלאי שלך כאן.</div></div>';
     return;
   }
-  const pill = { hot: ['g','חם'], dead: ['r','מת'], stable: ['g','יציב'] };
-  const order = { dead: 0, hot: 1, stable: 2 };
+  const pill = { hot: ['g','חם'], dead: ['r','מת'], slow: ['a','לא נמכר'], stable: ['g','יציב'] };
+  const order = { dead: 0, slow: 1, hot: 2, stable: 3 };
   const sorted = list.slice().sort((a,b) => (order[a.status]??3) - (order[b.status]??3));
 
   const rows = sorted.map(p => {
     const [cls, txt] = pill[p.status] || ['g','—'];
     const act = p.action
-      ? '<span class="pill ' + (p.status === 'dead' ? 'a' : 'b') + '">' + gxEsc(p.action) + '</span>'
+      ? '<span class="pill ' + (p.status === 'dead' || p.status === 'slow' ? 'a' : 'b') + '">' + gxEsc(p.action) + '</span>'
       : '—';
     return '<tr>' +
       '<td>' + gxEsc(p.name) + '</td>' +

@@ -1243,13 +1243,16 @@ def store_state(store_id):
     for name, qty in stock.items():
         if name in flagged:
             continue
+        wk = per_product_weekly.get(name, 0)
+        # stock sitting with no sales is not "stable" — surface it
+        slow = wk == 0 and qty > 0
         products.append({
             "name": name,
             "stock": qty,
-            "weekly_sales": per_product_weekly.get(name, 0),
+            "weekly_sales": wk,
             "price": prices.get(name),
-            "status": "stable",
-            "action": None,
+            "status": "slow" if slow else "stable",
+            "action": "בדוק מלאי" if slow else None,
         })
 
     alerts = len(dead) + len([p for p in hot if p.get("order_quantity", 0) > 0])
