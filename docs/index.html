@@ -671,26 +671,8 @@ select.fi { cursor: pointer; }
 
       <!-- ═══ STORE: Trends ═══ -->
       <div class="sc" id="sc-trends">
-        <div class="chart-card">
-          <div class="chart-title">מכירות שבועיות — 8 שבועות אחרונים</div>
-          <div class="chart-area" style="height:160px"><canvas id="salesChart"></canvas></div>
-        </div>
-        <div class="two-col">
-          <div class="chart-card" style="margin-bottom:0">
-            <div class="chart-title">מוצרים לפי סטטוס</div>
-            <div class="chart-area" style="height:120px"><canvas id="hotColdChart"></canvas></div>
-          </div>
-          <div class="chart-card" style="margin-bottom:0">
-            <div class="chart-title">טרנד ביקוש — קטגוריה שלך</div>
-            <div class="chart-area" style="height:120px"><canvas id="trendChart"></canvas></div>
-          </div>
-        </div>
-        <div class="ai-row" style="margin-top:14px">
-          <div class="aico p"><i class="ti ti-bulb"></i></div>
-          <div>
-            <div class="at">תובנת הסוכן</div>
-            <div class="ad">לפי טרנד Google, ביקוש למוצרי שמש צפוי לעלות 40% בשבועיים הקרובים. עכשיו זמן טוב להגדיל מלאי קרם SPF ולהשיק קמפיין ממוקד.</div>
-          </div>
+        <div id="trends-body">
+          <div class="net-card"><div class="net-sub">מחשב טרנדים…</div></div>
         </div>
       </div>
 
@@ -1583,6 +1565,124 @@ async function loadProducts() {
     '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
+// ═══ Trends — live from /trends/<id>, computed from the store's own sales ═══
+let __gxCharts = {};
+
+function gxDestroy(k) {
+  if (__gxCharts[k]) { try { __gxCharts[k].destroy(); } catch (e) {} __gxCharts[k] = null; }
+}
+
+async function loadTrends() {
+  const box = document.getElementById('trends-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">מחשב טרנדים מהמכירות שלך…</div></div>';
+
+  let d;
+  try {
+    const res = await fetch(gxApi() + '/trends/' + encodeURIComponent(gxStore()));
+    d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'HTTP ' + res.status);
+  } catch (e) { gxErr(box, 'loadTrends'); return; }
+
+  if (!d.weekly || !d.weekly.length) {
+    box.innerHTML = '<div class="net-card"><div class="net-title">אין מספיק היסטוריה</div>' +
+      '<div class="net-sub">צריך כמה שבועות של מכירות כדי לזהות דפוסים.</div></div>';
+    return;
+  }
+
+  const insight = d.insight
+    ? '<div class="ai-row" style="margin-bottom:14px">' +
+        '<div class="aico p"><i class="ti ti-bulb"></i></div>' +
+        '<div><div class="at">תובנת הסוכן</div>' +
+        '<div class="ad">' + gxEsc(d.insight) + '</div></div>' +
+      '</div>'
+    : '';
+
+  const movers = (d.movers || []).map(m => {
+    const dir = { rising: ['g', '↑'], falling: ['r', '↓'], stable: ['b', '→'] }[m.direction] || ['b','→'];
+    const sign = m.change_pct > 0 ? '+' : '';
+    return '<tr>' +
+      '<td>' + gxEsc(m.product) + '</td>' +
+      '<td><span class="pill ' + dir[0] + '">' + dir[1] + ' ' + sign + m.change_pct + '%</span></td>' +
+      '<td>' + gxEsc(m.peak_day) + '</td>' +
+      '<td>' + m.peak_share_pct + '%</td>' +
+      '<td>' + m.units.toLocaleString('he-IL') + '</td>' +
+    '</tr>';
+  }).join('');
+
+  box.innerHTML = insight +
+    '<div class="chart-card">' +
+      '<div class="chart-title">הכנסה שבועית — ' + d.weekly.length + ' שבועות אחרונים</div>' +
+      '<div class="chart-area" style="height:170px"><canvas id="gxWeekly"></canvas></div>' +
+    '</div>' +
+    '<div class="chart-card">' +
+      '<div class="chart-title">הכנסה ממוצעת לפי יום בשבוע</div>' +
+      '<div class="chart-area" style="height:180px"><canvas id="gxDow"></canvas></div>' +
+    '</div>' +
+    '<div class="sec" style="margin:18px 0 12px">מוצרים — לאן הם זזים ומתי נמכרים</div>' +
+    '<table class="tbl"><thead><tr>' +
+      '<th style="width:34%">מוצר</th><th style="width:18%">שינוי</th>' +
+      '<th style="width:16%">יום שיא</th><th style="width:16%">ריכוז</th>' +
+      '<th style="width:16%">יחידות</th>' +
+    '</tr></thead><tbody>' + movers + '</tbody></table>' +
+    '<div class="net-sub" style="margin-top:12px;font-size:11px">' +
+      'מחושב מ-' + d.based_on_days + ' ימי מכירה שלך. ללא מקורות חיצוניים.</div>';
+
+  if (typeof Chart === 'undefined') return;
+
+  const ink = 'rgba(255,255,255,.55)', grid = 'rgba(255,255,255,.07)';
+  const base = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },   // one series — the title names it
+    scales: {
+      x: { grid: { display: false }, ticks: { color: ink, font: { size: 11 } } },
+      y: { grid: { color: grid }, ticks: { color: ink, font: { size: 11 },
+           callback: v => '₪' + Number(v).toLocaleString('he-IL') } }
+    }
+  };
+
+  gxDestroy('weekly');
+  __gxCharts.weekly = new Chart(document.getElementById('gxWeekly'), {
+    type: 'line',
+    data: {
+      labels: d.weekly.map(w => w.week.slice(5).replace('-', '/')),
+      datasets: [{
+        data: d.weekly.map(w => w.revenue),
+        borderColor: '#1D9E75', backgroundColor: 'rgba(29,158,117,0.10)',
+        borderWidth: 2, pointRadius: 4, pointHoverRadius: 6,
+        pointBackgroundColor: '#1D9E75', tension: .35, fill: true
+      }]
+    },
+    options: Object.assign({}, base, {
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: false }, tooltip: {
+        callbacks: { label: c => '₪' + Number(c.parsed.y).toLocaleString('he-IL') } } }
+    })
+  });
+
+  // one hue: the peak day simply reads darker, because it is larger
+  const dow = d.by_day_of_week || [];
+  const peak = Math.max(...dow.map(x => x.avg_revenue), 0);
+  gxDestroy('dow');
+  __gxCharts.dow = new Chart(document.getElementById('gxDow'), {
+    type: 'bar',
+    data: {
+      labels: dow.map(x => x.day),
+      datasets: [{
+        data: dow.map(x => x.avg_revenue),
+        backgroundColor: dow.map(x =>
+          x.avg_revenue === peak ? '#1D9E75' : 'rgba(29,158,117,0.38)'),
+        borderRadius: 4, borderSkipped: false,
+        barPercentage: .78, categoryPercentage: .86
+      }]
+    },
+    options: Object.assign({}, base, {
+      plugins: { legend: { display: false }, tooltip: {
+        callbacks: { label: c => '₪' + Number(c.parsed.y).toLocaleString('he-IL') + ' בממוצע' } } }
+    })
+  });
+}
+
 function show(id) {
   document.querySelectorAll('.sc').forEach(s => s.classList.remove('on'));
   const el = document.getElementById('sc-' + id);
@@ -1594,7 +1694,7 @@ function show(id) {
     const oc = n.getAttribute('onclick') || '';
     if (oc.includes("'" + id + "'")) n.classList.add('on');
   });
-  if (id === 'trends' && !chartsBuilt) { buildCharts(); chartsBuilt = true; }
+  if (id === 'trends') loadTrends();
   if (id === 'bulk') loadGroupBuying();
   if (id === 'overview') loadOverview();
   if (id === 'products') loadProducts();

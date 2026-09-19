@@ -1095,6 +1095,7 @@ def build_demo_db(db):
         })
         created.append({"store_id": sid, "name": spec["name"]})
 
+    created.append(build_bakery_demo(db))
     return created
 
 
@@ -1539,6 +1540,206 @@ def import_bkmv(store_id):
     summary["saved"] = True
     summary["store_name"] = store.get("name")
     return jsonify(summary)
+
+# ===========================================
+# Trends — computed from the store's own history
+# ===========================================
+
+HE_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+
+
+def _he_dow(d):
+    """Python: Mon=0..Sun=6. Israeli week starts Sunday."""
+    return (d.weekday() + 1) % 7
+
+
+@app.route("/trends/<store_id>", methods=["GET"])
+def trends(store_id):
+    """
+    Weekly revenue, day-of-week demand, and which products are moving.
+    All of it from the store's own sales — no external service.
+    """
+    db = load_db()
+    store = db.get("stores", {}).get(store_id)
+    if not store:
+        return jsonify({"error": "store not found"}), 404
+    csv_text = store.get("sales_csv")
+    if not csv_text:
+        return jsonify({"error": "no sales data"}), 404
+
+    prices = store.get("prices", {}) or {}
+    sales = parse_sales_csv(csv_text)
+
+    def rev(name, qty):
+        try:
+            return qty * float(prices.get(name, 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # ---- weekly revenue, last 8 weeks ----
+    from datetime import timedelta
+    weekly = {}
+    all_dates = []
+    for name, hist in sales.items():
+        for d, q in hist:
+            if d is None:
+                continue
+            all_dates.append(d)
+            monday = d - timedelta(days=d.weekday())
+            key = monday.strftime("%Y-%m-%d")
+            weekly[key] = weekly.get(key, 0.0) + rev(name, q)
+    weeks = sorted(weekly.keys())[-8:]
+    weekly_series = [{"week": w, "revenue": int(round(weekly[w]))} for w in weeks]
+
+    # ---- demand by day of week ----
+    dow_rev = [0.0] * 7
+    dow_days = [set() for _ in range(7)]
+    for name, hist in sales.items():
+        for d, q in hist:
+            if d is None:
+                continue
+            i = _he_dow(d)
+            dow_rev[i] += rev(name, q)
+            dow_days[i].add(d.date())
+    dow = []
+    for i in range(7):
+        n = len(dow_days[i]) or 1
+        dow.append({"day": HE_DAYS[i], "avg_revenue": int(round(dow_rev[i] / n)),
+                    "observed_days": len(dow_days[i])}) 
+    busiest = max(dow, key=lambda x: x["avg_revenue"]) if any(d["avg_revenue"] for d in dow) else None
+    quietest = min((d for d in dow if d["observed_days"]),
+                   key=lambda x: x["avg_revenue"], default=None)
+
+    # ---- per-product: which day carries it, and is it rising ----
+    movers = []
+    for name, hist in sales.items():
+        dated = sorted([(d, q) for d, q in hist if d is not None], key=lambda x: x[0])
+        if len(dated) < 4:
+            continue
+        mid = len(dated) // 2
+        first = sum(q for _, q in dated[:mid])
+        second = sum(q for _, q in dated[mid:])
+        change = ((second - first) / first * 100) if first else 0.0
+        by_day = [0.0] * 7
+        for d, q in dated:
+            by_day[_he_dow(d)] += q
+        peak = by_day.index(max(by_day))
+        total = sum(by_day) or 1
+        movers.append({
+            "product": name,
+            "change_pct": round(change, 1),
+            "direction": "rising" if change > 15 else ("falling" if change < -15 else "stable"),
+            "peak_day": HE_DAYS[peak],
+            "peak_share_pct": int(round(by_day[peak] / total * 100)),
+            "units": int(round(total)),
+        })
+    movers.sort(key=lambda m: abs(m["change_pct"]), reverse=True)
+
+    # ---- one honest headline ----
+    insight = None
+    if busiest and quietest and busiest["avg_revenue"] > 0:
+        ratio = busiest["avg_revenue"] / max(1, quietest["avg_revenue"])
+        if ratio >= 1.5:
+            insight = ("יום %s חזק פי %.1f מיום %s. כדאי להיערך במלאי ובכוח אדם."
+                       % (busiest["day"], ratio, quietest["day"]))
+    concentrated = [m for m in movers if m["peak_share_pct"] >= 35]
+    if concentrated:
+        top = concentrated[0]
+        extra = ("%d%% מהמכירות של %s מרוכזות ביום %s."
+                 % (top["peak_share_pct"], top["product"], top["peak_day"]))
+        insight = (insight + " " + extra) if insight else extra
+
+    return jsonify({
+        "store_id": store_id,
+        "store_name": store.get("name"),
+        "weekly": weekly_series,
+        "by_day_of_week": dow,
+        "busiest_day": busiest,
+        "quietest_day": quietest,
+        "movers": movers[:10],
+        "insight": insight,
+        "based_on_days": len(set(d.date() for d in all_dates)),
+        "source": "own_sales",
+    })
+
+# ===========================================
+# Bakery demo — day-of-week demand is the whole story
+# ===========================================
+
+# per-weekday multiplier, Sunday..Saturday (Israeli week)
+BAKERY_ITEMS = [
+    # name,                base, price, [Sun, Mon, Tue, Wed, Thu, Fri, Sat], drift
+    ("חלה מתוקה",            18,  14, [0.2, 0.2, 0.2, 0.3, 1.6, 4.8, 0.1],  0.03),
+    ("לחם כפרי מחמצת",       26,  18, [1.0, 1.0, 0.9, 1.0, 1.3, 1.6, 0.2],  0.02),
+    ("קרואסון חמאה",         22,   9, [0.7, 0.6, 0.6, 0.7, 1.1, 1.9, 2.2],  0.05),
+    ("בורקס גבינה",          34,   7, [1.2, 1.1, 1.0, 1.1, 1.2, 1.4, 0.3],  0.00),
+    ("עוגת שמרים שוקולד",     9,  42, [0.4, 0.3, 0.3, 0.4, 1.2, 2.8, 0.4],  0.04),
+    ("רוגלך (100 גר')",      28,  11, [1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.6],  0.01),
+    ("בגט צרפתי",            20,  10, [1.0, 1.0, 1.0, 1.0, 1.2, 1.7, 0.2], -0.01),
+    ("עוגיות חמאה 250 גר'",   7,  24, [0.8, 0.8, 0.7, 0.7, 0.8, 0.9, 0.3], -0.09),
+]
+
+
+def build_bakery_csv(weeks=8):
+    """Daily sales with real weekday shape, so trends have something to find."""
+    from datetime import datetime, timedelta
+    rows = ["date,product,qty"]
+    start = datetime(2026, 7, 6)  # a Monday
+    for w in range(weeks):
+        for offset in range(7):
+            day = start + timedelta(days=w * 7 + offset)
+            dow = (day.weekday() + 1) % 7  # Sunday = 0
+            for name, base, _price, shape, drift in BAKERY_ITEMS:
+                qty = base * shape[dow] * (1 + drift * w)
+                # a little texture so the data isn't suspiciously smooth
+                qty *= 1 + (((w * 7 + offset + len(name)) % 5) - 2) * 0.04
+                qty = int(round(qty))
+                if qty > 0:
+                    rows.append("%s,%s,%d" % (day.strftime("%Y-%m-%d"), name, qty))
+    return "\n".join(rows)
+
+
+def build_bakery_demo(db):
+    from datetime import datetime
+    sid = "demo_bakery"
+    stock = {
+        "חלה מתוקה": 12, "לחם כפרי מחמצת": 30, "קרואסון חמאה": 18,
+        "בורקס גבינה": 45, "עוגת שמרים שוקולד": 6, "רוגלך (100 גר')": 35,
+        "בגט צרפתי": 22, "עוגיות חמאה 250 גר'": 40,
+    }
+    prices = {n: p for n, _b, p, _s, _d in BAKERY_ITEMS}
+
+    db.setdefault("stores", {})[sid] = {
+        "name": "מאפיית לחם הארץ",
+        "phone": "0504567890",
+        "active": True,
+        "demo": True,
+        "stock": stock,
+        "prices": prices,
+        "sales_csv": build_bakery_csv(8),
+    }
+    db.setdefault("recommendations", [])
+    db["recommendations"] = [r for r in db["recommendations"] if r.get("store_id") != sid]
+    db["recommendations"].append({
+        "store_id": sid,
+        "created": datetime.now().isoformat(),
+        "analysis": {
+            "dead_products": [
+                {"name": "עוגיות חמאה 250 גר'", "stock": 40, "days_no_sale": 0,
+                 "current_price": 24, "recommended_price": 17,
+                 "reason": "מכירות ירדו 40% בחודשיים — המלאי מצטבר"},
+            ],
+            "hot_products": [
+                {"name": "חלה מתוקה", "weekly_sales": 152, "stock": 12,
+                 "days_until_empty": 1, "order_quantity": 180, "supplier": "קמח שלמה"},
+                {"name": "עוגת שמרים שוקולד", "weekly_sales": 48, "stock": 6,
+                 "days_until_empty": 1, "order_quantity": 60, "supplier": "קמח שלמה"},
+            ],
+            "total_potential_savings": 960,
+            "summary_he": "חלה ועוגת שמרים נגמרות לפני שישי. עוגיות החמאה בירידה מתמשכת.",
+        },
+    })
+    return {"store_id": sid, "name": "מאפיית לחם הארץ"}
 
 
 if __name__ == "__main__":
