@@ -726,3 +726,247 @@ def forecast_endpoint(store_id):
         return jsonify({"error": str(e)}), 500
     urgent = [r for r in results if r["reorder_now"]]
     return jsonify({"store_id": store_id, "forecasts": results, "urgent_count": len(urgent), "total_products": len(results)})
+
+# ===========================================
+# Group buying - function #10
+# ===========================================
+
+def volume_tier(total_qty):
+    """Volume discount tier based on aggregated order size."""
+    if total_qty >= 500:
+        return "platinum", 15
+    if total_qty >= 200:
+        return "gold", 10
+    if total_qty >= 100:
+        return "silver", 7
+    if total_qty >= 50:
+        return "bronze", 4
+    return "none", 0
+
+
+def find_group_buying_opportunities(db, min_stores=2):
+    """
+    Finds products several stores need at the same time, so their
+    orders can be combined into one volume order at a better price.
+    """
+    latest = {}
+    for rec in db.get("recommendations", []):
+        sid = rec.get("store_id")
+        if sid is None:
+            continue
+        if sid not in latest or rec.get("created", "") > latest[sid].get("created", ""):
+            latest[sid] = rec
+
+    demand = {}
+    for sid, rec in latest.items():
+        store = db.get("stores", {}).get(sid)
+        if not store:
+            continue
+        analysis = rec.get("analysis") or {}
+        for p in analysis.get("hot_products", []) or []:
+            raw = p.get("name")
+            name = (raw or "").strip()
+            if not name:
+                continue
+            try:
+                qty = int(p.get("order_quantity", 0) or 0)
+            except (ValueError, TypeError):
+                continue
+            if qty <= 0:
+                continue
+            key = name.lower()
+            if key not in demand:
+                demand[key] = {"display_name": name, "participants": []}
+            demand[key]["participants"].append({
+                "store_id": sid,
+                "store_name": store.get("name"),
+                "store_phone": store.get("phone"),
+                "quantity": qty,
+            })
+
+    opps = []
+    for info in demand.values():
+        parts = info["participants"]
+        if len(parts) < min_stores:
+            continue
+        total = sum(p["quantity"] for p in parts)
+        tier, pct = volume_tier(total)
+        opps.append({
+            "product_name": info["display_name"],
+            "participating_stores": len(parts),
+            "total_quantity": total,
+            "participants": parts,
+            "discount_tier": tier,
+            "estimated_discount_pct": pct,
+        })
+
+    opps.sort(key=lambda o: o["total_quantity"], reverse=True)
+    return opps
+
+
+# ===========================================
+# Data-driven lending - function #12
+# ===========================================
+
+def monthly_revenue_from_sales(sales, price_map=None):
+    """
+    sales: {product: [(date, qty), ...]} from parse_sales_csv
+    Returns {"YYYY-MM": revenue} using price_map when available,
+    otherwise unit counts as a proxy.
+    """
+    price_map = price_map or {}
+    buckets = {}
+    for name, history in sales.items():
+        price = price_map.get(name)
+        try:
+            price = float(price) if price is not None else 1.0
+        except (ValueError, TypeError):
+            price = 1.0
+        for d, qty in history:
+            if d is None:
+                continue
+            key = "%04d-%02d" % (d.year, d.month)
+            buckets[key] = buckets.get(key, 0.0) + (qty * price)
+    return buckets
+
+
+def calculate_credit_profile(csv_text, price_map=None):
+    """
+    Scores a store's creditworthiness from its own sales history.
+    No external credit bureau - the data the store already gave us.
+    """
+    sales = parse_sales_csv(csv_text)
+    monthly = monthly_revenue_from_sales(sales, price_map)
+
+    months = sorted(monthly.keys())
+    values = [monthly[m] for m in months]
+    n = len(values)
+
+    if n == 0:
+        return {
+            "months_of_data": 0,
+            "avg_monthly_revenue": 0,
+            "trend": "unknown",
+            "volatility_pct": 0,
+            "score": 0,
+            "risk": "insufficient_data",
+            "max_loan": 0,
+            "reason": "no dated sales data",
+        }
+
+    avg = sum(values) / n
+
+    # trend: first half vs second half
+    trend = "stable"
+    if n >= 2:
+        mid = n // 2
+        first = sum(values[:mid]) / max(1, mid)
+        second = sum(values[mid:]) / max(1, n - mid)
+        if first > 0:
+            change = (second - first) / first
+            if change > 0.15:
+                trend = "growing"
+            elif change < -0.15:
+                trend = "declining"
+
+    # volatility: coefficient of variation
+    if n >= 2 and avg > 0:
+        var = sum((v - avg) ** 2 for v in values) / n
+        volatility = (var ** 0.5) / avg * 100
+    else:
+        volatility = 0.0
+
+    # score 0-100
+    score = 50
+    if n >= 6:
+        score += 20
+    elif n >= 3:
+        score += 10
+    else:
+        score -= 10
+
+    if trend == "growing":
+        score += 20
+    elif trend == "declining":
+        score -= 20
+
+    if volatility < 20:
+        score += 15
+    elif volatility < 40:
+        score += 5
+    else:
+        score -= 15
+
+    score = max(0, min(100, score))
+
+    if score >= 75:
+        risk, mult = "low", 2.0
+    elif score >= 55:
+        risk, mult = "medium", 1.2
+    elif score >= 35:
+        risk, mult = "high", 0.5
+    else:
+        risk, mult = "very_high", 0.0
+
+    max_loan = int(round(avg * mult))
+
+    return {
+        "months_of_data": n,
+        "avg_monthly_revenue": round(avg, 2),
+        "trend": trend,
+        "volatility_pct": round(volatility, 1),
+        "score": score,
+        "risk": risk,
+        "max_loan": max_loan,
+        "monthly_breakdown": {m: round(monthly[m], 2) for m in months},
+    }
+
+
+@app.route("/network/group-buying", methods=["GET"])
+def group_buying():
+    db = load_db()
+    opps = find_group_buying_opportunities(db)
+    return jsonify({"opportunities": opps, "count": len(opps)})
+
+
+@app.route("/network/group-buying/notify", methods=["POST"])
+def notify_group_buying():
+    data = request.json or {}
+    product = data.get("product_name")
+    if not product:
+        return jsonify({"error": "missing product_name"}), 400
+    db = load_db()
+    opps = find_group_buying_opportunities(db)
+    match = None
+    for o in opps:
+        if o["product_name"].strip().lower() == str(product).strip().lower():
+            match = o
+            break
+    if not match:
+        return jsonify({"error": "no matching group"}), 404
+    sent = []
+    for part in match["participants"]:
+        msg = (
+            "Genius group buy: " + str(match["total_quantity"]) + " units of "
+            + match["product_name"] + " across " + str(match["participating_stores"])
+            + " stores. Est. discount " + str(match["estimated_discount_pct"])
+            + "%. Your share: " + str(part["quantity"]) + " units."
+        )
+        ok = send_whatsapp(part["store_phone"], msg)
+        sent.append({"store_id": part["store_id"], "sent": bool(ok)})
+    return jsonify({"product_name": match["product_name"], "notified": sent})
+
+
+@app.route("/lending/<store_id>", methods=["POST"])
+def lending_endpoint(store_id):
+    data = request.json or {}
+    csv_text = data.get("csv", "")
+    price_map = data.get("prices", {})
+    if not csv_text:
+        return jsonify({"error": "missing csv"}), 400
+    try:
+        profile = calculate_credit_profile(csv_text, price_map)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    profile["store_id"] = store_id
+    return jsonify(profile)
