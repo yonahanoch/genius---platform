@@ -814,36 +814,8 @@ select.fi { cursor: pointer; }
       <!-- ═══ STORE: Bulk ═══ -->
       <div class="sc" id="sc-bulk">
         <div class="sec" style="margin-bottom:12px">קנייה משותפת פעילה</div>
-
-        <div class="net-card">
-          <div class="net-title">קרם SPF 50 — הזמנה קבוצתית</div>
-          <div class="net-sub">5 חנויות הצטרפו • מינימום 200 יח' • מחיר ספק: ₪28 → <strong style="color:var(--green)">₪21 (-25%)</strong></div>
-          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">התקדמות: 160/200 יח'</div>
-          <div class="prog-bar"><div class="prog-fill" style="width:80%"></div></div>
-          <div class="net-row">
-            <span class="tag g">נסגר בעוד 2 ימים</span>
-            <button class="btn btnp">הצטרף — 40 יח'</button>
-          </div>
-        </div>
-
-        <div class="net-card">
-          <div class="net-title">מסכת שיער Premium — הזמנה קבוצתית</div>
-          <div class="net-sub">2 חנויות הצטרפו • מינימום 100 יח' • מחיר ספק: ₪18 → <strong style="color:var(--amber)">₪13 (-28%)</strong></div>
-          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">התקדמות: 40/100 יח'</div>
-          <div class="prog-bar"><div class="prog-fill amber" style="width:40%"></div></div>
-          <div class="net-row">
-            <span class="tag a">צריך עוד חנויות</span>
-            <button class="btn btnp">הצטרף — 20 יח'</button>
-          </div>
-        </div>
-
-        <div class="net-card">
-          <div class="net-title">סרום ויטמין C — פתח הזמנה חדשה</div>
-          <div class="net-sub">ביקוש ב-4 חנויות ברשת • עדיין אין הזמנה קבוצתית</div>
-          <div class="net-row">
-            <span class="tag b">הזדמנות ליזום</span>
-            <button class="btn btnp"><i class="ti ti-plus"></i> יזום הזמנה</button>
-          </div>
+        <div id="bulk-list">
+          <div class="net-card"><div class="net-sub">טוען הזדמנויות מהרשת…</div></div>
         </div>
       </div>
 
@@ -1271,6 +1243,95 @@ const screenTitles = {
 let curRole = 'store';
 let chartsBuilt = false;
 
+// ═══ Group buying — live from /network/group-buying ═══
+function bulkTierStyle(tier) {
+  if (tier === 'platinum' || tier === 'gold') return { cls: 'g', fill: '' };
+  if (tier === 'silver' || tier === 'bronze') return { cls: 'a', fill: ' amber' };
+  return { cls: 'b', fill: ' amber' };
+}
+function bulkNextTier(total) {
+  const steps = [[50,'bronze'],[100,'silver'],[200,'gold'],[500,'platinum']];
+  for (const [need, name] of steps) if (total < need) return { need, name };
+  return null;
+}
+function bulkEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+async function loadGroupBuying() {
+  const box = document.getElementById('bulk-list');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">טוען הזדמנויות מהרשת…</div></div>';
+
+  let data;
+  try {
+    const res = await fetch((window.GENIUS_API_URL || 'http://localhost:8080') + '/network/group-buying');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  } catch (e) {
+    box.innerHTML = '<div class="net-card">' +
+      '<div class="net-title">אין חיבור לשרת</div>' +
+      '<div class="net-sub">לא הצלחנו לטעון הזדמנויות כרגע. נסה שוב בעוד רגע.</div>' +
+      '<div class="net-row"><button class="btn btnp" onclick="loadGroupBuying()">נסה שוב</button></div>' +
+      '</div>';
+    return;
+  }
+
+  const opps = (data && data.opportunities) || [];
+  if (!opps.length) {
+    box.innerHTML = '<div class="net-card">' +
+      '<div class="net-title">אין הזמנות קבוצתיות פעילות</div>' +
+      '<div class="net-sub">ברגע ששתי חנויות ברשת יזדקקו לאותו מוצר, ההזדמנות תופיע כאן אוטומטית.</div>' +
+      '<div class="net-row"><button class="btn" onclick="loadGroupBuying()">רענן</button></div>' +
+      '</div>';
+    return;
+  }
+
+  box.innerHTML = opps.map(o => {
+    const tier = bulkTierStyle(o.discount_tier);
+    const next = bulkNextTier(o.total_quantity);
+    const pct = next ? Math.min(100, Math.round(o.total_quantity / next.need * 100)) : 100;
+    const disc = o.estimated_discount_pct > 0
+      ? '<strong style="color:var(--green)">הנחה משוערת ' + o.estimated_discount_pct + '%</strong>'
+      : 'עדיין ללא מדרגת הנחה';
+    const prog = next
+      ? '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">' +
+        o.total_quantity + '/' + next.need + " יח' למדרגת " + next.name + '</div>' +
+        '<div class="prog-bar"><div class="prog-fill' + tier.fill + '" style="width:' + pct + '%"></div></div>'
+      : '<div style="font-size:11px;color:var(--green);margin-bottom:4px">מדרגת ההנחה הגבוהה ביותר הושגה</div>';
+    const who = o.participants.map(pt =>
+      bulkEsc(pt.store_name) + " (" + pt.quantity + " יח')").join(' · ');
+
+    return '<div class="net-card">' +
+      '<div class="net-title">' + bulkEsc(o.product_name) + ' — הזמנה קבוצתית</div>' +
+      '<div class="net-sub">' + o.participating_stores + " חנויות · " +
+        o.total_quantity + " יח' · " + disc + '</div>' +
+      prog +
+      '<div class="net-sub" style="margin-top:6px;font-size:11px">' + who + '</div>' +
+      '<div class="net-row">' +
+        '<span class="tag ' + tier.cls + '">' + bulkEsc(o.discount_tier) + '</span>' +
+        '<button class="btn btnp" onclick="notifyGroupBuy(\'' +
+          bulkEsc(o.product_name).replace(/'/g, "\\'") + '\')">שלח לכל המשתתפים</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function notifyGroupBuy(product) {
+  try {
+    const res = await fetch((window.GENIUS_API_URL || 'http://localhost:8080') + '/network/group-buying/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_name: product })
+    });
+    const d = await res.json();
+    alert(res.ok ? 'נשלחה הודעה ל-' + (d.notified || []).length + ' חנויות' : (d.error || 'שליחה נכשלה'));
+  } catch (e) {
+    alert('אין חיבור לשרת');
+  }
+}
+
 function show(id) {
   document.querySelectorAll('.sc').forEach(s => s.classList.remove('on'));
   const el = document.getElementById('sc-' + id);
@@ -1283,6 +1344,7 @@ function show(id) {
     if (oc.includes("'" + id + "'")) n.classList.add('on');
   });
   if (id === 'trends' && !chartsBuilt) { buildCharts(); chartsBuilt = true; }
+  if (id === 'bulk') loadGroupBuying();
 }
 
 function switchRole(role) {

@@ -605,17 +605,6 @@ except ImportError:
     print("! APScheduler לא מותקן — אין ניתוח אוטומטי")
 
 # ── הפעלה ──
-if __name__ == "__main__":
-    print("=" * 50)
-    print("🚀 Genius — מערכת מלאה")
-    print("=" * 50)
-    db = load_db()
-    print(f"חנויות: {len(db['stores'])} | ספקים: {len(db['suppliers'])}")
-    print(f"Claude API: {'✓' if ANTHROPIC_KEY else '✗ חסר'}")
-    print(f"Twilio: {'✓' if TWILIO_SID else '✗ חסר (מצב דמו)'}")
-    print(f"Stripe: {'✓' if STRIPE_KEY else '✗ חסר'}")
-    print("=" * 50)
-    app.run(host="0.0.0.0", port=8080)
 
 
 # ===========================================
@@ -970,3 +959,16 @@ def lending_endpoint(store_id):
         return jsonify({"error": str(e)}), 500
     profile["store_id"] = store_id
     return jsonify(profile)
+
+
+if __name__ == "__main__":
+    print("=" * 50)
+    print("🚀 Genius — מערכת מלאה")
+    print("=" * 50)
+    db = load_db()
+    print(f"חנויות: {len(db['stores'])} | ספקים: {len(db['suppliers'])}")
+    print(f"Claude API: {'✓' if ANTHROPIC_KEY else '✗ חסר'}")
+    print(f"Twilio: {'✓' if TWILIO_SID else '✗ חסר (מצב דמו)'}")
+    print(f"Stripe: {'✓' if STRIPE_KEY else '✗ חסר'}")
+    print("=" * 50)
+    app.run(host="0.0.0.0", port=8080)
