@@ -607,6 +607,7 @@ select.fi { cursor: pointer; }
     <div class="logo">
       <div class="logo-name">Gen<span>ius</span></div>
       <div class="logo-role" id="logo-role">כהן פארם</div>
+      <select class="fi" id="store-picker" onchange="gxSwitchStore(this.value)" aria-label="בחר חנות" style="display:none;margin-top:8px;width:100%;padding:5px 8px;font-size:12px"></select>
     </div>
 
     <nav class="nav" id="nav-store">
@@ -622,6 +623,7 @@ select.fi { cursor: pointer; }
       <div class="ni" onclick="show('ads')"><i class="ti ti-speakerphone"></i> פרסום חכם</div>
       <div class="ni" onclick="show('lending')"><i class="ti ti-cash"></i> מימון</div>
       <div class="nav-sep">חשבון</div>
+      <div class="ni" onclick="show('connect')"><i class="ti ti-plug-connected"></i> חיבור נתונים</div>
       <div class="ni" onclick="show('settings')"><i class="ti ti-settings"></i> הגדרות</div>
     </nav>
 
@@ -699,6 +701,30 @@ select.fi { cursor: pointer; }
         <div id="network-list">
           <div class="net-card"><div class="net-sub">מחפש הזדמנויות ברשת…</div></div>
         </div>
+      </div>
+
+      <!-- ═══ STORE: Connect data ═══ -->
+      <div class="sc" id="sc-connect">
+        <div class="sec" style="margin-bottom:12px">חיבור הנתונים של החנות</div>
+        <div class="net-card">
+          <div class="net-title">קובץ אחיד (BKMVDATA) — מומלץ</div>
+          <div class="net-sub">כל תוכנת קופה או הנהלת חשבונות מאושרת בישראל חייבת לדעת לייצא אותו (הוראה 131 של רשות המסים). כולל מכירות ברמת פריט ומלאי — מה שמאפשר התראות מחסור.</div>
+        </div>
+        <div class="net-card">
+          <div class="net-title">CSV מאקסל</div>
+          <div class="net-sub">עמודות: תאריך, מוצר, כמות. בלי נתוני מלאי נוכל לנתח מגמות ולזהות מוצרים שלא זזים, אבל לא להתריע על מחסור.</div>
+        </div>
+        <div class="net-card">
+          <div class="fg"><label class="fl" for="conn-name">שם החנות</label><input class="fi" id="conn-name" placeholder="למשל: מאפיית השכונה"></div>
+          <div class="fg" style="margin-top:10px"><label class="fl" for="conn-file">קובץ</label>
+            <input class="fi" id="conn-file" type="file" accept=".txt,.TXT,.csv,.CSV,.dat,.DAT"></div>
+          <div class="net-row" style="margin-top:12px">
+            <button class="btn" onclick="gxConnect(true)">בדוק קובץ</button>
+            <button class="btn btnp" onclick="gxConnect(false)">טען נתונים</button>
+          </div>
+          <div class="net-sub" style="margin-top:8px;font-size:11px">כשחנות דמו פעילה, הנתונים נטענים לחנות חדשה — הדמו לא נדרס.</div>
+        </div>
+        <div id="conn-result"></div>
       </div>
 
       <!-- ═══ STORE: Forecast ═══ -->
@@ -1136,7 +1162,7 @@ select.fi { cursor: pointer; }
 const screenTitles = {
   overview: 'סקירה — כהן פארם', products: 'מוצרים ומלאי', trends: 'גרפים וטרנדים',
   chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת',
-  ads: 'פרסום חכם', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
+  ads: 'פרסום חכם', connect: 'חיבור נתונים', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
   stores: 'ניהול חנויות', 'alerts-admin': 'התראות', onboard: 'צרף חנות חדשה',
   'admin-chat': 'סוכן AI — מנהל',
   'sup-dashboard': 'סקירה — יוניליוור ישראל', 'sup-orders': 'בקשות פתוחות',
@@ -1273,7 +1299,7 @@ async function loadForecast() {
       '<div class="net-sub">העלה קובץ מכירות כדי לקבל תחזית ביקוש.</div></div>';
     return;
   }
-  const trendTxt = { rising: 'במגמת עלייה', falling: 'במגמת ירידה', stable: 'יציב' };
+  const trendTxt = { rising: 'במגמת עלייה', falling: 'במגמת ירידה', stable: 'יציב', stopped: 'הפסיק להימכר' };
   const confTxt  = { high: 'ביטחון גבוה', medium: 'ביטחון בינוני', low: 'ביטחון נמוך' };
 
   const metrics = '<div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">' +
@@ -1590,6 +1616,8 @@ async function loadTrends() {
     return;
   }
 
+  const units = d.metric === 'units';
+  const fmt = v => units ? Number(v).toLocaleString('he-IL') + " יח'" : '₪' + Number(v).toLocaleString('he-IL');
   const insight = d.insight
     ? '<div class="ai-row" style="margin-bottom:14px">' +
         '<div class="aico p"><i class="ti ti-bulb"></i></div>' +
@@ -1612,11 +1640,11 @@ async function loadTrends() {
 
   box.innerHTML = insight +
     '<div class="chart-card">' +
-      '<div class="chart-title">הכנסה שבועית — ' + d.weekly.length + ' שבועות אחרונים</div>' +
+      '<div class="chart-title">' + (units ? 'יחידות שנמכרו' : 'הכנסה') + ' שבועית — ' + d.weekly.length + ' שבועות אחרונים</div>' +
       '<div class="chart-area" style="height:170px"><canvas id="gxWeekly"></canvas></div>' +
     '</div>' +
     '<div class="chart-card">' +
-      '<div class="chart-title">הכנסה ממוצעת לפי יום בשבוע</div>' +
+      '<div class="chart-title">' + (units ? 'יחידות בממוצע' : 'הכנסה ממוצעת') + ' לפי יום בשבוע</div>' +
       '<div class="chart-area" style="height:180px"><canvas id="gxDow"></canvas></div>' +
     '</div>' +
     '<div class="sec" style="margin:18px 0 12px">מוצרים — לאן הם זזים ומתי נמכרים</div>' +
@@ -1637,7 +1665,7 @@ async function loadTrends() {
     scales: {
       x: { grid: { display: false }, ticks: { color: ink, font: { size: 11 } } },
       y: { grid: { color: grid }, ticks: { color: ink, font: { size: 11 },
-           callback: v => '₪' + Number(v).toLocaleString('he-IL') } }
+           callback: v => fmt(v) } }
     }
   };
 
@@ -1656,7 +1684,7 @@ async function loadTrends() {
     options: Object.assign({}, base, {
       interaction: { mode: 'index', intersect: false },
       plugins: { legend: { display: false }, tooltip: {
-        callbacks: { label: c => '₪' + Number(c.parsed.y).toLocaleString('he-IL') } } }
+        callbacks: { label: c => fmt(c.parsed.y) } } }
     })
   });
 
@@ -1678,9 +1706,149 @@ async function loadTrends() {
     },
     options: Object.assign({}, base, {
       plugins: { legend: { display: false }, tooltip: {
-        callbacks: { label: c => '₪' + Number(c.parsed.y).toLocaleString('he-IL') + ' בממוצע' } } }
+        callbacks: { label: c => fmt(c.parsed.y) + ' בממוצע' } } }
     })
   });
+}
+
+// ═══ Store picker + data connection ═══
+let __gxStores = [];
+
+function gxStoreName() {
+  const s = __gxStores.find(x => x.store_id === gxStore());
+  return s ? s.name : '';
+}
+function gxIsDemo(id) {
+  const s = __gxStores.find(x => x.store_id === id);
+  return !s || s.demo;
+}
+function gxSaved() { try { return localStorage.getItem('gx_store'); } catch (e) { return null; } }
+function gxSave(id) { try { localStorage.setItem('gx_store', id); } catch (e) {} }
+
+async function gxLoadStores(selectId) {
+  const sel = document.getElementById('store-picker');
+  try {
+    const res = await fetch(gxApi() + '/stores');
+    const d = await res.json();
+    __gxStores = d.stores || [];
+  } catch (e) { __gxStores = []; }
+  if (!__gxStores.length) { if (sel) sel.style.display = 'none'; return; }
+
+  const want = selectId || gxSaved() || window.GENIUS_STORE_ID;
+  if (__gxStores.some(s => s.store_id === want)) window.GENIUS_STORE_ID = want;
+  else window.GENIUS_STORE_ID = __gxStores[0].store_id;
+
+  if (sel) {
+    sel.style.display = '';
+    sel.innerHTML = __gxStores.map(s =>
+      '<option value="' + gxEsc(s.store_id) + '"' +
+      (s.store_id === gxStore() ? ' selected' : '') + '>' +
+      gxEsc(s.name) + (s.demo ? ' (דמו)' : '') + '</option>').join('');
+  }
+  gxApplyStoreName();
+}
+
+function gxApplyStoreName() {
+  const name = gxStoreName();
+  if (!name) return;
+  if (typeof curRole === 'undefined' || curRole === 'store') {
+    const lr = document.getElementById('logo-role');
+    if (lr) lr.textContent = name;
+  }
+  screenTitles.overview = 'סקירה — ' + name;
+  screenTitles.chat = 'סוכן AI — ' + name;
+}
+
+function gxCurrentScreen() {
+  const on = document.querySelector('.sc.on');
+  return on ? on.id.replace(/^sc-/, '') : 'overview';
+}
+
+function gxSwitchStore(id) {
+  window.GENIUS_STORE_ID = id;
+  gxSave(id);
+  __gxStoreCache = null;
+  gxApplyStoreName();
+  show(gxCurrentScreen());
+}
+
+async function gxDetect(file) {
+  if (/bkmv/i.test(file.name)) return 'bkmv';
+  const head = await file.slice(0, 4096).arrayBuffer();
+  const txt = new TextDecoder('iso-8859-1').decode(head);
+  return /(^|[\r\n])\s*(C100|100C|D110|110D|M100|100M|A100|100A|B100|100B)/.test(txt) ? 'bkmv' : 'csv';
+}
+
+function gxRow(label, value) {
+  return '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
+    '<span style="color:var(--text3)">' + label + '</span><span>' + value + '</span></div>';
+}
+
+async function gxConnect(preview) {
+  const out = document.getElementById('conn-result');
+  const input = document.getElementById('conn-file');
+  const file = input && input.files && input.files[0];
+  if (!file) {
+    out.innerHTML = '<div class="net-card"><div class="net-sub">בחר קובץ קודם.</div></div>';
+    return;
+  }
+  const kind = await gxDetect(file);
+  const cur = gxStore();
+  const target = preview ? cur : (gxIsDemo(cur) ? 'store_' + Date.now().toString(36) : cur);
+  const name = (document.getElementById('conn-name').value || '').trim() ||
+               (gxIsDemo(cur) ? 'החנות שלי' : gxStoreName());
+
+  out.innerHTML = '<div class="net-card"><div class="net-sub">' +
+    (preview ? 'בודק את הקובץ…' : 'טוען נתונים ומנתח…') + '</div></div>';
+
+  const fd = new FormData();
+  fd.append('file', file);
+  const qs = preview ? 'preview=1' : 'name=' + encodeURIComponent(name);
+  let d, ok;
+  try {
+    const res = await fetch(gxApi() + '/import/' + kind + '/' + encodeURIComponent(target) + '?' + qs,
+                            { method: 'POST', body: fd });
+    d = await res.json(); ok = res.ok;
+  } catch (e) {
+    out.innerHTML = '<div class="net-card"><div class="net-title">אין חיבור לשרת</div>' +
+      '<div class="net-sub">הקובץ לא נשלח. נסה שוב בעוד רגע.</div></div>';
+    return;
+  }
+  if (!ok) {
+    out.innerHTML = '<div class="net-card"><div class="net-title">לא הצלחנו לקרוא את הקובץ</div>' +
+      '<div class="net-sub">' + gxEsc(d.error || 'שגיאה לא ידועה') + '</div></div>';
+    return;
+  }
+
+  const typeLabel = kind === 'bkmv' ? 'קובץ אחיד (BKMVDATA)' : 'CSV';
+  let rows = gxRow('סוג הקובץ', typeLabel);
+  if (kind === 'bkmv') {
+    rows += gxRow('מסמכים', d.documents) + gxRow('שורות מכירה', d.sale_lines_used + ' מתוך ' + d.line_items) +
+            gxRow('פריטי מלאי', d.inventory_items) + gxRow('מוצרים עם מחיר', d.products_with_price);
+    if (d.count_matches === false) rows += gxRow('בדיקת שלמות', '⚠ מספר הרשומות לא תואם');
+  } else {
+    rows += gxRow('מוצרים', d.products) + gxRow('שורות מכירה', d.sale_rows) +
+            gxRow('טווח תאריכים', gxEsc(d.first_date) + ' — ' + gxEsc(d.last_date));
+  }
+
+  if (preview) {
+    out.innerHTML = '<div class="net-card"><div class="net-title">הקובץ נקרא בהצלחה</div>' + rows +
+      '<div class="net-row" style="margin-top:12px"><button class="btn btnp" onclick="gxConnect(false)">טען את הנתונים</button></div></div>';
+    return;
+  }
+
+  const a = d.analysis || {};
+  out.innerHTML = '<div class="net-card"><div class="net-title">הנתונים נטענו ✓</div>' + rows +
+    (a.summary_he ? '<div class="net-sub" style="margin-top:10px">' + gxEsc(a.summary_he) + '</div>' : '') +
+    '<div class="net-row" style="margin-top:12px"><button class="btn btnp" onclick="gxAfterConnect(\'' +
+    gxEsc(target).replace(/'/g, '') + '\')">לסקירת החנות</button></div></div>';
+}
+
+async function gxAfterConnect(id) {
+  await gxLoadStores(id);
+  __gxStoreCache = null;
+  gxSave(id);
+  show('overview');
 }
 
 function show(id) {
@@ -1711,7 +1879,8 @@ function switchRole(role) {
     const nav = document.getElementById('nav-'+r);
     if (nav) nav.style.display = r === role ? '' : 'none';
   });
-  const logos = { store:'כהן פארם', admin:'פאנל מנהל', supplier:'יוניליוור ישראל' };
+  const logos = { store: (typeof gxStoreName === 'function' && gxStoreName()) || 'כהן פארם', admin:'פאנל מנהל', supplier:'יוניליוור ישראל' };
+  const sp = document.getElementById('store-picker'); if (sp) sp.style.display = role === 'store' && __gxStores.length ? '' : 'none';
   document.getElementById('logo-role').textContent = logos[role] || '';
   const first = { store:'overview', admin:'dashboard', supplier:'sup-dashboard' };
   show(first[role]);
@@ -1901,7 +2070,7 @@ async function sendChat(role) {
     }
   }
 
-document.addEventListener('DOMContentLoaded', () => loadOverview());
+document.addEventListener('DOMContentLoaded', async () => { await gxLoadStores(); loadOverview(); });
 </script>
 </body>
 </html>

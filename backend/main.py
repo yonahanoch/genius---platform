@@ -616,12 +616,14 @@ def parse_sales_csv(csv_text):
     sales = {}
     def pick(row, options):
         for key in row:
-            if key and key.strip().lower() in options:
+            if key and key.replace("\ufeff", "").strip().strip('"').lower() in options:
                 return row[key]
         return None
-    date_keys = {"date", "day"}
-    name_keys = {"product", "name", "product_name"}
-    qty_keys = {"qty", "quantity", "units", "sold"}
+    date_keys = {"date", "day", "sale_date", "תאריך", "תאריך מכירה", "יום", "תאריך מסמך"}
+    name_keys = {"product", "name", "product_name", "item", "description",
+                 "מוצר", "שם", "שם מוצר", "שם פריט", "פריט", "תיאור", "תיאור פריט"}
+    qty_keys = {"qty", "quantity", "units", "sold",
+                "כמות", "כמות שנמכרה", "נמכר", "יחידות", "יח'"}
     for row in reader:
         raw_date = pick(row, date_keys)
         raw_name = pick(row, name_keys)
@@ -693,9 +695,18 @@ def forecast_product(history, current_stock, lead_time_days=3):
 def forecast_all(csv_text, stock_map, lead_time_days=3):
     sales = parse_sales_csv(csv_text)
     results = []
+    every = [d for h in sales.values() for d, q in h if d is not None]
+    data_end = max(every) if every else None
     for name, history in sales.items():
         stock = stock_map.get(name, 0)
         f = forecast_product(history, stock, lead_time_days)
+        sold = [d for d, q in history if d is not None and q > 0]
+        # the average over the whole history would keep "selling" an item
+        # that stopped weeks ago — once it's been silent 14+ days, it's stopped
+        if data_end is not None and sold and (data_end - max(sold)).days >= 14:
+            f.update({"adjusted_daily_rate": 0.0, "days_until_empty": 999,
+                      "reorder_now": False, "order_quantity": 0, "trend": "stopped",
+                      "days_since_last_sale": (data_end - max(sold)).days})
         f["product_name"] = name
         f["current_stock"] = stock
         results.append(f)
@@ -1375,8 +1386,13 @@ def parse_bkmv(content):
 
     for lb in lines:
         code = _bkmv_field(lb, 1, 4)
+        # vendor docs spell record codes C100/D110/M100/Z900; the spec as
+        # extracted from its Hebrew PDF reads 100C/110D. RTL extraction often
+        # reverses Latin+digit runs, so accept both spellings.
+        if len(code) == 4 and code[:3].isdigit() and code[3].isalpha():
+            code = code[3] + code[:3]
         seen += 1
-        if code == "100C":
+        if code == "C100":
             rec = {k: _bkmv_field(lb, s, n) for k, s, n in BKMV_C100}
             rec["total_with_vat"] = _bkmv_num(rec["total_with_vat"])
             rec["vat"] = _bkmv_num(rec["vat"])
@@ -1384,7 +1400,7 @@ def parse_bkmv(content):
             docs.append(rec)
             dt = rec["doc_type"]
             doc_type_counts[dt] = doc_type_counts.get(dt, 0) + 1
-        elif code == "110D":
+        elif code == "D110":
             rec = {k: _bkmv_field(lb, s, n) for k, s, n in BKMV_D110}
             rec["quantity"] = _bkmv_num(rec["quantity"], 4)
             rec["unit_price"] = _bkmv_num(rec["unit_price"])
@@ -1392,7 +1408,7 @@ def parse_bkmv(content):
             rec["line_total"] = _bkmv_num(rec["line_total"])
             rec["date"] = _bkmv_date(rec["doc_date"])
             items.append(rec)
-        elif code == "100M":
+        elif code == "M100":
             rec = {k: _bkmv_field(lb, s, n) for k, s, n in BKMV_M100}
             rec["opening_balance"] = _bkmv_num(rec["opening_balance"])
             rec["receipts"] = _bkmv_num(rec["receipts"])
@@ -1400,7 +1416,7 @@ def parse_bkmv(content):
             rec["cost"] = _bkmv_num(rec["cost"])
             rec["on_hand"] = rec["opening_balance"] + rec["receipts"] - rec["disbursements"]
             stock_rows.append(rec)
-        elif code == "900Z":
+        elif code == "Z900":
             declared_total = _bkmv_num(_bkmv_field(lb, 20, 15), 0)
 
     return {
@@ -1524,7 +1540,7 @@ def import_bkmv(store_id):
 
     db = load_db()
     store = db.setdefault("stores", {}).setdefault(store_id, {
-        "name": store_id, "phone": "", "active": True,
+        "name": request.args.get("name") or store_id, "phone": "", "active": True,
     })
     store["sales_csv"] = converted["sales_csv"]
     if converted["stock"]:
@@ -1535,7 +1551,13 @@ def import_bkmv(store_id):
         store["prices"] = merged
     store["data_source"] = "bkmv"
     store["imported_at"] = datetime.now().isoformat()
+    analysis = _save_rule_analysis(db, store_id)
     save_db(db)
+    summary["analysis"] = {
+        "dead": len((analysis or {}).get("dead_products", [])),
+        "hot": len((analysis or {}).get("hot_products", [])),
+        "summary_he": (analysis or {}).get("summary_he"),
+    }
 
     summary["saved"] = True
     summary["store_name"] = store.get("name")
@@ -1570,7 +1592,14 @@ def trends(store_id):
     prices = store.get("prices", {}) or {}
     sales = parse_sales_csv(csv_text)
 
+    # without prices, revenue is all zeros and every chart goes flat —
+    # fall back to units so a plain CSV still shows its shape
+    priced = any((prices.get(n) or 0) for n in sales)
+    metric = "revenue" if priced else "units"
+
     def rev(name, qty):
+        if not priced:
+            return float(qty)
         try:
             return qty * float(prices.get(name, 0) or 0)
         except (TypeError, ValueError):
@@ -1660,6 +1689,7 @@ def trends(store_id):
         "insight": insight,
         "based_on_days": len(set(d.date() for d in all_dates)),
         "source": "own_sales",
+        "metric": metric,
     })
 
 # ===========================================
@@ -1740,6 +1770,176 @@ def build_bakery_demo(db):
         },
     })
     return {"store_id": sid, "name": "מאפיית לחם הארץ"}
+
+# ===========================================
+# Real-store onboarding: CSV import + rule-based analysis
+# ===========================================
+
+def _decode_upload(raw):
+    """Israeli Excel saves CSV as Windows-1255 more often than UTF-8."""
+    if isinstance(raw, str):
+        return raw
+    for enc in ("utf-8-sig", "cp1255", "iso8859-8"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _read_upload():
+    """Same stream rule as the BKMV route: check content type before files."""
+    ctype = (request.content_type or "").lower()
+    if ctype.startswith("multipart/form-data"):
+        f = request.files.get("file") or next(iter(request.files.values()), None)
+        return f.read() if f else b""
+    return request.get_data(cache=False) or b""
+
+
+def build_rule_analysis(store):
+    """
+    A recommendation built from plain rules, so a newly connected store gets
+    a working overview without an AI key. The Claude analysis can replace it.
+      dead: stock on hand and no sale for 30+ days of the data's own span
+      hot:  forecast says it runs out within lead time + 2 days
+    """
+    csv_text = store.get("sales_csv") or ""
+    stock = store.get("stock") or {}
+    prices = store.get("prices") or {}
+    sales = parse_sales_csv(csv_text)
+
+    dates = [d for h in sales.values() for d, _ in h if d is not None]
+    if not dates:
+        return None
+    last_day = max(dates)
+
+    dead = []
+    names = set(sales) | set(stock)
+    for name in names:
+        on_hand = stock.get(name, 0) or 0
+        if on_hand <= 0:
+            continue
+        sold = [d for d, q in sales.get(name, []) if d is not None and q > 0]
+        days = (last_day - max(sold)).days if sold else 999
+        if days < 30:
+            continue
+        price = prices.get(name)
+        rec = int(round(price * 0.75)) if price else None
+        dead.append({
+            "name": name, "stock": on_hand, "days_no_sale": days if days < 999 else None,
+            "current_price": price, "recommended_price": rec,
+            "reason": ("לא נמכר %d ימים" % days) if days < 999 else "אין מכירות בנתונים",
+        })
+
+    hot = []
+    if stock:
+        for f in forecast_all(csv_text, stock, 3):
+            if f["product_name"] not in stock:
+                continue            # no stock figure — can't judge urgency
+            if f["reorder_now"] and f["order_quantity"] > 0:
+                hot.append({
+                    "name": f["product_name"],
+                    "weekly_sales": int(round(f["adjusted_daily_rate"] * 7)),
+                    "stock": f["current_stock"],
+                    "days_until_empty": f["days_until_empty"],
+                    "order_quantity": f["order_quantity"],
+                })
+
+    freed = sum((d["stock"] or 0) * (d["recommended_price"] or 0) for d in dead)
+    parts = []
+    if hot:
+        parts.append("%d מוצרים עומדים להיגמר" % len(hot))
+    if dead:
+        parts.append("%d מוצרים לא זזים 30+ יום" % len(dead))
+    if not stock:
+        parts.append("חסרים נתוני מלאי — העלה קובץ אחיד כדי לקבל התראות מחסור")
+    summary = ". ".join(parts) + "." if parts else "לא נמצאו בעיות דחופות."
+
+    return {
+        "dead_products": sorted(dead, key=lambda x: -(x["days_no_sale"] or 999)),
+        "hot_products": sorted(hot, key=lambda x: x["days_until_empty"]),
+        "total_potential_savings": int(freed),
+        "summary_he": summary,
+        "source": "rules",
+    }
+
+
+def _save_rule_analysis(db, store_id):
+    from datetime import datetime
+    analysis = build_rule_analysis(db["stores"][store_id])
+    if analysis is None:
+        return None
+    db.setdefault("recommendations", [])
+    db["recommendations"] = [
+        r for r in db["recommendations"]
+        if not (r.get("store_id") == store_id and (r.get("analysis") or {}).get("source") == "rules")
+    ]
+    db["recommendations"].append({
+        "store_id": store_id, "created": datetime.now().isoformat(), "analysis": analysis,
+    })
+    return analysis
+
+
+@app.route("/import/csv/<store_id>", methods=["POST"])
+def import_csv(store_id):
+    """
+    Loads a sales CSV (date, product, qty — Hebrew or English headers).
+    ?preview=1 inspects without saving.
+    """
+    raw = _read_upload()
+    if not raw:
+        return jsonify({"error": "no file received"}), 400
+    text = _decode_upload(raw)
+    sales = parse_sales_csv(text)
+    dated = sum(1 for h in sales.values() for d, _ in h if d is not None)
+    if not sales or dated == 0:
+        return jsonify({
+            "error": "לא נמצאו שורות מכירה עם תאריך. נדרשות עמודות: תאריך, מוצר, כמות",
+        }), 400
+
+    dates = sorted(d for h in sales.values() for d, _ in h if d is not None)
+    summary = {
+        "store_id": store_id,
+        "products": len(sales),
+        "sale_rows": dated,
+        "first_date": dates[0].strftime("%Y-%m-%d"),
+        "last_date": dates[-1].strftime("%Y-%m-%d"),
+    }
+    if request.args.get("preview"):
+        summary["preview"] = True
+        return jsonify(summary)
+
+    db = load_db()
+    store = db.setdefault("stores", {}).setdefault(store_id, {
+        "name": request.args.get("name") or store_id, "phone": "", "active": True,
+    })
+    store["sales_csv"] = text
+    store["data_source"] = "csv"
+    analysis = _save_rule_analysis(db, store_id)
+    save_db(db)
+    summary["saved"] = True
+    summary["analysis"] = {
+        "dead": len((analysis or {}).get("dead_products", [])),
+        "hot": len((analysis or {}).get("hot_products", [])),
+        "summary_he": (analysis or {}).get("summary_he"),
+    }
+    return jsonify(summary)
+
+
+@app.route("/stores", methods=["GET"])
+def list_stores():
+    db = load_db()
+    out = []
+    for sid, s in db.get("stores", {}).items():
+        out.append({
+            "store_id": sid,
+            "name": s.get("name") or sid,
+            "demo": bool(s.get("demo")),
+            "has_data": bool(s.get("sales_csv")),
+            "data_source": s.get("data_source") or ("demo" if s.get("demo") else None),
+        })
+    out.sort(key=lambda x: (x["demo"], x["name"]))
+    return jsonify({"stores": out, "count": len(out)})
 
 
 if __name__ == "__main__":
