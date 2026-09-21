@@ -1,8 +1,8 @@
 {
   "name": "Genius — AI Retail Network",
   "short_name": "Genius",
-  "description": "The smart agent that manages inventory, the network, and marketing for small retail stores.",
-  "start_url": "/index.html",
+  "description": "סוכן חכם לחנויות קטנות: מלאי, מכירות ומגמות מהנתונים של החנות.",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0F1117",
   "theme_color": "#1D9E75",
@@ -20,5 +20,6 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "scope": "./"
 }

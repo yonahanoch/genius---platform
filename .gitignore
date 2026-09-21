@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 genius_db.json
+genius_db.json.bak
+genius_db.json.lock
+.genius_db.*.tmp
+.admin_token

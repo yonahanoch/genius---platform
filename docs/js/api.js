@@ -8,7 +8,7 @@
  * Change API_BASE_URL to your Replit backend URL once deployed.
  */
 
-const API_BASE_URL = window.GENIUS_API_URL || "http://localhost:8080";
+const API_BASE_URL = window.GENIUS_API_URL || "http://localhost:8080"; // set in index.html
 
 const GeniusAPI = {
   /**

@@ -29,7 +29,32 @@
 | `STRIPE_PRICE_BASIC` | Stripe → Products → ₪299 | לא |
 | `STRIPE_PRICE_PRO` | Stripe → Products → ₪599 | לא |
 
+| `ADMIN_TOKEN` | סיסמה ארוכה שתבחר | מומלץ — בלעדיו נוצרת אוטומטית בקובץ `.admin_token` |
+| `STRIPE_WEBHOOK_SECRET` | Stripe → Webhooks → Signing secret | חובה כדי שתשלום יפעיל מנוי |
+| `PUBLIC_URL` | הכתובת הציבורית של השרת | חובה לאימות חתימות Twilio |
+| `CORS_ORIGINS` | ברירת מחדל: האתר ב-GitHub Pages + localhost | לא |
+| `GENIUS_DATA_DIR` | תיקיית מסד הנתונים (ברירת מחדל: תיקיית ההרצה) | לא |
+| `PROXY_HOPS` | כמה פרוקסים לפני השרת (Replit: 1, שרת ישיר: 0) — לזיהוי IP אמיתי במגבלות קצב | לא (ברירת מחדל 1) |
+| `LENDING_SHOW_AMOUNT` | `1` רק כשיש גוף מממן שותף — אחרת סכום מסגרת לא מוצג | לא |
+
 **טיפ:** התחל רק עם ANTHROPIC_API_KEY. השאר ירוץ במצב דמו — מדפיס לקונסול במקום לשלוח.
+
+## אבטחה — מה חשוב לדעת
+- **כל חנות מקבלת קוד גישה** (store_token) ברגע שהיא נוצרת — בהרשמה (`/onboard`) או בהעלאת הקובץ הראשון. בלי הקוד אי אפשר לקרוא או לשנות את נתוני החנות. השרת שומר רק hash של הקוד.
+- **חנויות דמו** פתוחות לקריאה לכולם, ואי אפשר לשנות אותן. הן נבנות מחדש בכל הפעלה של השרת.
+- **מסכי ניהול** (`/admin`, `/admin/seed-demo`) דורשים את הכותרת `X-Admin-Token`.
+- **מנוי בתשלום** מופעל רק מ-webhook חתום של Stripe (`checkout.session.completed`). דף ה-payment-success לא משנה כלום.
+- **WhatsApp נכנס** מתקבל רק עם חתימת Twilio תקינה; זיהוי החנות לפי התאמה מדויקת של מספר הטלפון.
+- **רשת**: חנות אמיתית משתתפת בהעברות ובקנייה משותפת רק אחרי שהצטרפה בעצמה. מספרי טלפון לא מוצגים באתר.
+- **קוד גישה שאבד**: `POST /admin/store/<id>/reset-token` (עם X-Admin-Token) מנפיק קוד חדש — לוודא זהות בעל החנות לפני שמוסרים. `DELETE /admin/store/<id>` מוחק חנות (למשל מישהו נרשם עם טלפון שלא שלו).
+- **רשת**: טלפון של חנות נחשף לחנות אחרת רק אחרי ששתיהן לחצו "בקש יצירת קשר". הודעות WhatsApp ברשת הן טקסט קבוע, בלי שמות או טקסט שהחנויות כתבו.
+- **מנוי**: אחרי שתקופת הניסיון נגמרת בלי תשלום, או שמנוי בוטל — אפשר עדיין לצפות בנתונים, אבל לא להעלות חדשים או להשתמש בצ'אט.
+- **מסד הנתונים** (JSON) נכתב עם נעילה וכתיבה אטומית, ועם גיבוי `.bak`. זה מספיק לשרת אחד; ללקוחות רבים — לעבור ל-Postgres.
+
+## בדיקות
+```bash
+cd backend && python3 tests/test_audit.py
+```
 
 ## שלב 3 — Twilio WhatsApp (כשמוכנים)
 1. twilio.com → הרשמה חינם
@@ -44,7 +69,8 @@
 1. dashboard.stripe.com → הרשמה
 2. Products → צור "Genius Basic" ₪299/חודש → העתק את ה-price_xxx
 3. צור "Genius Pro" ₪599/חודש
-4. Webhooks → הוסף: `https://YOUR-REPL.repl.co/webhook/stripe`
+4. Webhooks → הוסף: `https://YOUR-REPL.repl.co/webhook/stripe` עם האירועים `checkout.session.completed`, `invoice.payment_failed`, `customer.subscription.deleted`
+5. העתק את ה-Signing secret ל-`STRIPE_WEBHOOK_SECRET`
 
 ---
 
