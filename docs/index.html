@@ -1683,18 +1683,49 @@ async function loadTrends() {
       '<td>' + gxEsc(m.peak_day) + '</td><td>' + gxEsc(m.peak_share_pct) + '%</td>' +
       '<td>' + gxNum(m.units) + '</td></tr>';
   }).join('');
-  box.innerHTML = insight +
+  const kindTxt = { erev: 'ערב חג', chag: 'חג' };
+  const upcoming = (d.upcoming_holidays || []).filter(u => u.kind === 'erev').slice(0, 3);
+  const upHtml = upcoming.length
+    ? '<div class="sec" style="margin:4px 0 10px">חגים קרובים</div>' + upcoming.map(u => {
+        const when = u.in_days === 0 ? 'היום' : (u.in_days === 1 ? 'מחר' : 'בעוד ' + gxEsc(u.in_days) + ' ימים');
+        let basis = 'אין עדיין ערב חג בנתונים להשוואה';
+        if (u.last_time) basis = 'בפעם הקודמת: פי ' + gxEsc(u.last_time.lift) + ' מיום רגיל' +
+          (u.last_time.top_product ? ' · ' + gxEsc(u.last_time.top_product) + ' פי ' + gxEsc(u.last_time.top_product_lift) : '');
+        else if (u.typical_eve_lift) basis = 'בערבי חג בנתונים שלך: בממוצע פי ' + gxEsc(u.typical_eve_lift) + ' מיום רגיל';
+        return '<div class="ai-row"><div class="aico w"><i class="ti ti-calendar-event"></i></div>' +
+          '<div style="flex:1"><div class="at">' + gxEsc(u.name) + ' — ' + when + ' (' + gxEsc(u.date.slice(8,10) + '/' + u.date.slice(5,7)) + ')</div>' +
+          '<div class="ad">' + basis + '</div></div></div>';
+      }).join('')
+    : '';
+  const effects = d.holiday_effects || [];
+  const effHtml = effects.length
+    ? '<div class="sec" style="margin:18px 0 12px">חגים בנתונים — מול יום רגיל באותו יום בשבוע</div>' +
+      '<table class="tbl"><thead><tr><th style="width:30%">יום</th><th style="width:18%">תאריך</th>' +
+      '<th style="width:18%">פי כמה</th><th style="width:34%">בלט במיוחד</th></tr></thead><tbody>' +
+      effects.map(e => '<tr><td>' + gxEsc(e.name) + ' <span style="color:var(--text3);font-size:11px">(' + gxEsc(kindTxt[e.kind] || '') + ', ' + gxEsc(e.weekday) + ')</span></td>' +
+        '<td>' + gxEsc(e.date.slice(8,10) + '/' + e.date.slice(5,7)) + '</td>' +
+        '<td>×' + gxEsc(e.lift) + '</td>' +
+        '<td>' + (e.top_product ? gxEsc(e.top_product) + ' ×' + gxEsc(e.top_product_lift) : '—') + '</td></tr>').join('') +
+      '</tbody></table>'
+    : '';
+  const closedTxt = (d.closed_on_holidays || []).length
+    ? ' ימים סגורים בחג: ' + (d.closed_on_holidays || []).map(c => gxEsc(c.name) + ' ' + gxEsc(c.date.slice(8,10) + '/' + c.date.slice(5,7))).join(', ') + '.'
+    : '';
+
+  box.innerHTML = insight + upHtml +
     '<div class="chart-card"><div class="chart-title">' + (units ? 'יחידות שנמכרו' : 'הכנסה') +
       ' שבועית (ראשון–שבת) — ' + d.weekly.length + ' שבועות מלאים</div>' +
       '<div class="chart-area" style="height:170px"><canvas id="gxWeekly"></canvas></div></div>' +
-    '<div class="chart-card"><div class="chart-title">' + (units ? 'יחידות בממוצע' : 'הכנסה ממוצעת') + ' לפי יום בשבוע</div>' +
+    '<div class="chart-card"><div class="chart-title">' + (units ? 'יחידות בממוצע' : 'הכנסה ממוצעת') + ' לפי יום בשבוע (ימים רגילים)</div>' +
       '<div class="chart-area" style="height:180px"><canvas id="gxDow"></canvas></div></div>' +
     '<div class="sec" style="margin:18px 0 12px">מוצרים — לאן הם זזים ומתי נמכרים</div>' +
     '<table class="tbl"><thead><tr><th style="width:34%">מוצר</th><th style="width:18%">שינוי</th>' +
       '<th style="width:16%">יום שיא</th><th style="width:16%">ריכוז</th><th style="width:16%">יחידות</th>' +
-    '</tr></thead><tbody>' + movers + '</tbody></table>' +
-    '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + d.based_on_days + ' ימי מכירה שלך' +
-      (d.partial_weeks_dropped ? '; שבועות חלקיים בקצוות לא מוצגים בגרף' : '') + '. ללא מקורות חיצוניים.</div>';
+    '</tr></thead><tbody>' + movers + '</tbody></table>' + effHtml +
+    '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + gxEsc(d.based_on_days) + ' ימי מכירה שלך' +
+      (d.partial_weeks_dropped ? '; שבועות חלקיים בקצוות לא מוצגים בגרף' : '') +
+      (d.holiday_days_excluded ? '; ' + gxEsc(d.holiday_days_excluded) + ' ימי חג וערבי חג לא נכללו בהשוואת הימים ובמגמות המוצרים' : '') +
+      '.' + closedTxt + ' לוח החגים: ישראל, 2024–2028.</div>';
 
   if (typeof Chart === 'undefined') return;
   const ink = 'rgba(255,255,255,.55)', grid = 'rgba(255,255,255,.07)';
@@ -1713,7 +1744,10 @@ async function loadTrends() {
       datasets: [{ data: d.weekly.map(w => w.revenue), borderColor: '#1D9E75', backgroundColor: 'rgba(29,158,117,0.10)',
         borderWidth: 2, pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: '#1D9E75', tension: .35, fill: true }] },
     options: Object.assign({}, base, { interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmt(c.parsed.y) } } } })
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => {
+        const hs = (d.weekly[c.dataIndex] || {}).holidays || [];
+        return fmt(c.parsed.y) + (hs.length ? ' · כולל ' + hs.join(', ') : '');
+      } } } } })
   });
   const dow = d.by_day_of_week || [];
   const peak = Math.max(...dow.map(x => x.avg_revenue), 0);

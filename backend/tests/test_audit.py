@@ -735,7 +735,63 @@ def test_signup_still_works_past_the_welcome_cap():
 
 def test_trend_insight_names_the_most_concentrated_product():
     t = C.get("/trends/demo_bakery").json
-    assert "65% מהמכירות של חלה מתוקה מרוכזות ביום שישי" in t["insight"], t["insight"]
+    top = max((m for m in t["movers"] if m["peak_share_pct"] >= 35), key=lambda m: m["peak_share_pct"])
+    assert top["product"] == "חלה מתוקה"
+    assert "%d%% מהמכירות של חלה מתוקה מרוכזות ביום שישי" % top["peak_share_pct"] in t["insight"], t["insight"]
+
+
+# ---------------- holidays ----------------
+
+def test_holiday_calendar_known_dates():
+    assert main.holiday_of("2026-09-11") == ("erev", "ערב ראש השנה")
+    assert main.holiday_of("2026-09-12") == ("chag", "ראש השנה")
+    assert main.holiday_of("2026-09-21") == ("chag", "יום כיפור")
+    assert main.holiday_of("2026-10-02") == ("erev", "ערב שמחת תורה")   # Hoshana Raba
+    assert main.holiday_of("2026-04-22") == ("chag", "יום העצמאות")
+    assert main.holiday_of("2025-05-01") == ("chag", "יום העצמאות")    # moved from Shabbat
+    assert main.holiday_of("2027-05-12") == ("chag", "יום העצמאות")
+    assert main.holiday_of("2026-12-05")[0] == "period"                 # Hanukkah
+    assert main.holiday_of("2026-09-15") is None
+
+
+def _holiday_store(boost_product="מוצר א", boost=5):
+    """Flat sales every day Jul 1 - Sep 30 2026; x`boost` on holiday eves; closed on holidays."""
+    from datetime import datetime, timedelta
+    rows = ["date,product,qty"]
+    d = datetime(2026, 7, 1)
+    while d <= datetime(2026, 9, 30):
+        h = main.holiday_of(d)
+        if not (h and h[0] == "chag"):
+            for p in ("מוצר א", "מוצר ב"):
+                q = 10 * (boost if (h and h[0] == "erev" and p == boost_product) else 1)
+                rows.append("%s,%s,%d" % (d.strftime("%Y-%m-%d"), p, q))
+        d += timedelta(days=1)
+    sid = new_id()
+    tok = upload(sid, "\n".join(rows)).json["store_token"]
+    return C.get("/trends/" + sid, headers={"X-Store-Token": tok}).json
+
+
+def test_holidays_do_not_distort_days_or_trends():
+    t = _holiday_store()
+    # every ordinary day sells the same, so no weekday stands out
+    assert len({d["avg_revenue"] for d in t["by_day_of_week"]}) == 1
+    # a holiday spike late in the period must not make a flat product "rising"
+    assert all(m["direction"] == "stable" for m in t["movers"]), t["movers"]
+    assert t["holiday_days_excluded"] >= 2
+
+
+def test_holiday_effects_measured_and_top_product_named_only_if_it_stands_out():
+    t = _holiday_store()
+    eve = [e for e in t["holiday_effects"] if e["name"] == "ערב ראש השנה"][0]
+    assert eve["lift"] == 3.0 and eve["top_product"] == "מוצר א" and eve["top_product_lift"] == 5.0
+    assert {c["name"] for c in t["closed_on_holidays"]} >= {"ראש השנה", "יום כיפור"}
+    assert "ערב ראש השנה" in t["insight"] or "ערב יום כיפור" in t["insight"]
+
+
+def test_upcoming_holidays():
+    from datetime import date
+    up = main.upcoming_holidays(date(2026, 9, 22), 30)
+    assert up[0] == {"date": "2026-09-25", "kind": "erev", "name": "ערב סוכות", "in_days": 3}
 
 
 def test_nightly_runs_once_per_day():

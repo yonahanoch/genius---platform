@@ -1955,11 +1955,16 @@ def _demo_sales_csv(base, months=DEMO_MONTHS, growth=0):
     while day < end:
         i = day.month - 3
         dow = (day.weekday() + 1) % 7
+        h = holiday_of(day)
+        if h and h[0] == "chag":
+            day += timedelta(days=1)
+            continue                      # closed on the holiday itself
+        boost = 1.8 if h and h[0] == "erev" else 1.0
         for item in base:
             name, qty = item[0], item[1]
             if len(item) > 2 and i > item[2]:
                 continue
-            want = qty * 12 / 30.0 * DEMO_WEEK[dow] * (1 + growth * i) + carry.get(name, 0.0)
+            want = qty * 12 / 30.0 * DEMO_WEEK[dow] * (1 + growth * i) * boost + carry.get(name, 0.0)
             q = int(want)
             carry[name] = want - q
             if q > 0:
@@ -2575,6 +2580,211 @@ def _save_bkmv_import(store_id, converted, summary):
 
 HE_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
 
+# ── Israeli holidays ──
+# kinds: "chag" = holiday (many shops closed), "erev" = the day before (the
+# big shopping day), "period" = chol hamoed / Hanukkah / Purim (unusual days).
+# Generated from the Hebrew calendar (pyluach, Israel), 2024-2028. Independence Day
+# follows the moving rule; spot-checked against calendar.2net.co.il for 2025-2027.
+IL_HOLIDAYS = {
+    "2024-03-24": ("period", "פורים"),
+    "2024-03-25": ("period", "פורים"),
+    "2024-04-22": ("erev", "ערב פסח"),
+    "2024-04-23": ("chag", "פסח"),
+    "2024-04-24": ("period", "חול המועד פסח"),
+    "2024-04-25": ("period", "חול המועד פסח"),
+    "2024-04-26": ("period", "חול המועד פסח"),
+    "2024-04-27": ("period", "חול המועד פסח"),
+    "2024-04-28": ("erev", "ערב שביעי של פסח"),
+    "2024-04-29": ("chag", "שביעי של פסח"),
+    "2024-05-13": ("erev", "ערב יום העצמאות"),
+    "2024-05-14": ("chag", "יום העצמאות"),
+    "2024-06-11": ("erev", "ערב שבועות"),
+    "2024-06-12": ("chag", "שבועות"),
+    "2024-10-02": ("erev", "ערב ראש השנה"),
+    "2024-10-03": ("chag", "ראש השנה"),
+    "2024-10-04": ("chag", "ראש השנה"),
+    "2024-10-11": ("erev", "ערב יום כיפור"),
+    "2024-10-12": ("chag", "יום כיפור"),
+    "2024-10-16": ("erev", "ערב סוכות"),
+    "2024-10-17": ("chag", "סוכות"),
+    "2024-10-18": ("period", "חול המועד סוכות"),
+    "2024-10-19": ("period", "חול המועד סוכות"),
+    "2024-10-20": ("period", "חול המועד סוכות"),
+    "2024-10-21": ("period", "חול המועד סוכות"),
+    "2024-10-22": ("period", "חול המועד סוכות"),
+    "2024-10-23": ("erev", "ערב שמחת תורה"),
+    "2024-10-24": ("chag", "שמחת תורה"),
+    "2024-12-26": ("period", "חנוכה"),
+    "2024-12-27": ("period", "חנוכה"),
+    "2024-12-28": ("period", "חנוכה"),
+    "2024-12-29": ("period", "חנוכה"),
+    "2024-12-30": ("period", "חנוכה"),
+    "2024-12-31": ("period", "חנוכה"),
+    "2025-01-01": ("period", "חנוכה"),
+    "2025-01-02": ("period", "חנוכה"),
+    "2025-03-14": ("period", "פורים"),
+    "2025-03-15": ("period", "פורים"),
+    "2025-04-12": ("erev", "ערב פסח"),
+    "2025-04-13": ("chag", "פסח"),
+    "2025-04-14": ("period", "חול המועד פסח"),
+    "2025-04-15": ("period", "חול המועד פסח"),
+    "2025-04-16": ("period", "חול המועד פסח"),
+    "2025-04-17": ("period", "חול המועד פסח"),
+    "2025-04-18": ("erev", "ערב שביעי של פסח"),
+    "2025-04-19": ("chag", "שביעי של פסח"),
+    "2025-04-30": ("erev", "ערב יום העצמאות"),
+    "2025-05-01": ("chag", "יום העצמאות"),
+    "2025-06-01": ("erev", "ערב שבועות"),
+    "2025-06-02": ("chag", "שבועות"),
+    "2025-09-22": ("erev", "ערב ראש השנה"),
+    "2025-09-23": ("chag", "ראש השנה"),
+    "2025-09-24": ("chag", "ראש השנה"),
+    "2025-10-01": ("erev", "ערב יום כיפור"),
+    "2025-10-02": ("chag", "יום כיפור"),
+    "2025-10-06": ("erev", "ערב סוכות"),
+    "2025-10-07": ("chag", "סוכות"),
+    "2025-10-08": ("period", "חול המועד סוכות"),
+    "2025-10-09": ("period", "חול המועד סוכות"),
+    "2025-10-10": ("period", "חול המועד סוכות"),
+    "2025-10-11": ("period", "חול המועד סוכות"),
+    "2025-10-12": ("period", "חול המועד סוכות"),
+    "2025-10-13": ("erev", "ערב שמחת תורה"),
+    "2025-10-14": ("chag", "שמחת תורה"),
+    "2025-12-15": ("period", "חנוכה"),
+    "2025-12-16": ("period", "חנוכה"),
+    "2025-12-17": ("period", "חנוכה"),
+    "2025-12-18": ("period", "חנוכה"),
+    "2025-12-19": ("period", "חנוכה"),
+    "2025-12-20": ("period", "חנוכה"),
+    "2025-12-21": ("period", "חנוכה"),
+    "2025-12-22": ("period", "חנוכה"),
+    "2026-03-03": ("period", "פורים"),
+    "2026-03-04": ("period", "פורים"),
+    "2026-04-01": ("erev", "ערב פסח"),
+    "2026-04-02": ("chag", "פסח"),
+    "2026-04-03": ("period", "חול המועד פסח"),
+    "2026-04-04": ("period", "חול המועד פסח"),
+    "2026-04-05": ("period", "חול המועד פסח"),
+    "2026-04-06": ("period", "חול המועד פסח"),
+    "2026-04-07": ("erev", "ערב שביעי של פסח"),
+    "2026-04-08": ("chag", "שביעי של פסח"),
+    "2026-04-21": ("erev", "ערב יום העצמאות"),
+    "2026-04-22": ("chag", "יום העצמאות"),
+    "2026-05-21": ("erev", "ערב שבועות"),
+    "2026-05-22": ("chag", "שבועות"),
+    "2026-09-11": ("erev", "ערב ראש השנה"),
+    "2026-09-12": ("chag", "ראש השנה"),
+    "2026-09-13": ("chag", "ראש השנה"),
+    "2026-09-20": ("erev", "ערב יום כיפור"),
+    "2026-09-21": ("chag", "יום כיפור"),
+    "2026-09-25": ("erev", "ערב סוכות"),
+    "2026-09-26": ("chag", "סוכות"),
+    "2026-09-27": ("period", "חול המועד סוכות"),
+    "2026-09-28": ("period", "חול המועד סוכות"),
+    "2026-09-29": ("period", "חול המועד סוכות"),
+    "2026-09-30": ("period", "חול המועד סוכות"),
+    "2026-10-01": ("period", "חול המועד סוכות"),
+    "2026-10-02": ("erev", "ערב שמחת תורה"),
+    "2026-10-03": ("chag", "שמחת תורה"),
+    "2026-12-05": ("period", "חנוכה"),
+    "2026-12-06": ("period", "חנוכה"),
+    "2026-12-07": ("period", "חנוכה"),
+    "2026-12-08": ("period", "חנוכה"),
+    "2026-12-09": ("period", "חנוכה"),
+    "2026-12-10": ("period", "חנוכה"),
+    "2026-12-11": ("period", "חנוכה"),
+    "2026-12-12": ("period", "חנוכה"),
+    "2027-03-23": ("period", "פורים"),
+    "2027-03-24": ("period", "פורים"),
+    "2027-04-21": ("erev", "ערב פסח"),
+    "2027-04-22": ("chag", "פסח"),
+    "2027-04-23": ("period", "חול המועד פסח"),
+    "2027-04-24": ("period", "חול המועד פסח"),
+    "2027-04-25": ("period", "חול המועד פסח"),
+    "2027-04-26": ("period", "חול המועד פסח"),
+    "2027-04-27": ("erev", "ערב שביעי של פסח"),
+    "2027-04-28": ("chag", "שביעי של פסח"),
+    "2027-05-11": ("erev", "ערב יום העצמאות"),
+    "2027-05-12": ("chag", "יום העצמאות"),
+    "2027-06-10": ("erev", "ערב שבועות"),
+    "2027-06-11": ("chag", "שבועות"),
+    "2027-10-01": ("erev", "ערב ראש השנה"),
+    "2027-10-02": ("chag", "ראש השנה"),
+    "2027-10-03": ("chag", "ראש השנה"),
+    "2027-10-10": ("erev", "ערב יום כיפור"),
+    "2027-10-11": ("chag", "יום כיפור"),
+    "2027-10-15": ("erev", "ערב סוכות"),
+    "2027-10-16": ("chag", "סוכות"),
+    "2027-10-17": ("period", "חול המועד סוכות"),
+    "2027-10-18": ("period", "חול המועד סוכות"),
+    "2027-10-19": ("period", "חול המועד סוכות"),
+    "2027-10-20": ("period", "חול המועד סוכות"),
+    "2027-10-21": ("period", "חול המועד סוכות"),
+    "2027-10-22": ("erev", "ערב שמחת תורה"),
+    "2027-10-23": ("chag", "שמחת תורה"),
+    "2027-12-25": ("period", "חנוכה"),
+    "2027-12-26": ("period", "חנוכה"),
+    "2027-12-27": ("period", "חנוכה"),
+    "2027-12-28": ("period", "חנוכה"),
+    "2027-12-29": ("period", "חנוכה"),
+    "2027-12-30": ("period", "חנוכה"),
+    "2027-12-31": ("period", "חנוכה"),
+    "2028-01-01": ("period", "חנוכה"),
+    "2028-03-12": ("period", "פורים"),
+    "2028-03-13": ("period", "פורים"),
+    "2028-04-10": ("erev", "ערב פסח"),
+    "2028-04-11": ("chag", "פסח"),
+    "2028-04-12": ("period", "חול המועד פסח"),
+    "2028-04-13": ("period", "חול המועד פסח"),
+    "2028-04-14": ("period", "חול המועד פסח"),
+    "2028-04-15": ("period", "חול המועד פסח"),
+    "2028-04-16": ("erev", "ערב שביעי של פסח"),
+    "2028-04-17": ("chag", "שביעי של פסח"),
+    "2028-05-01": ("erev", "ערב יום העצמאות"),
+    "2028-05-02": ("chag", "יום העצמאות"),
+    "2028-05-30": ("erev", "ערב שבועות"),
+    "2028-05-31": ("chag", "שבועות"),
+    "2028-09-20": ("erev", "ערב ראש השנה"),
+    "2028-09-21": ("chag", "ראש השנה"),
+    "2028-09-22": ("chag", "ראש השנה"),
+    "2028-09-29": ("erev", "ערב יום כיפור"),
+    "2028-09-30": ("chag", "יום כיפור"),
+    "2028-10-04": ("erev", "ערב סוכות"),
+    "2028-10-05": ("chag", "סוכות"),
+    "2028-10-06": ("period", "חול המועד סוכות"),
+    "2028-10-07": ("period", "חול המועד סוכות"),
+    "2028-10-08": ("period", "חול המועד סוכות"),
+    "2028-10-09": ("period", "חול המועד סוכות"),
+    "2028-10-10": ("period", "חול המועד סוכות"),
+    "2028-10-11": ("erev", "ערב שמחת תורה"),
+    "2028-10-12": ("chag", "שמחת תורה"),
+    "2028-12-13": ("period", "חנוכה"),
+    "2028-12-14": ("period", "חנוכה"),
+    "2028-12-15": ("period", "חנוכה"),
+    "2028-12-16": ("period", "חנוכה"),
+    "2028-12-17": ("period", "חנוכה"),
+    "2028-12-18": ("period", "חנוכה"),
+    "2028-12-19": ("period", "חנוכה"),
+    "2028-12-20": ("period", "חנוכה"),
+}
+
+
+def holiday_of(d):
+    """(kind, name) for a date/datetime, or None on an ordinary day."""
+    key = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+    return IL_HOLIDAYS.get(key)
+
+
+def upcoming_holidays(today, days=30):
+    """Eves and holidays in the next `days` days, soonest first."""
+    out = []
+    for k, (kind, name) in sorted(IL_HOLIDAYS.items()):
+        d = datetime.strptime(k, "%Y-%m-%d")
+        delta = (d.date() - today).days
+        if 0 <= delta <= days and kind in ("erev", "chag"):
+            out.append({"date": k, "kind": kind, "name": name, "in_days": delta})
+    return out
+
 
 def _he_dow(d):
     """Python: Mon=0..Sun=6. Israeli week starts Sunday."""
@@ -2630,14 +2840,25 @@ def trends(store_id):
     if len(weekly) < 2:
         weekly = {}      # one week, or pieces of weeks, is not a trend
     weeks = sorted(weekly.keys())[-8:]
-    weekly_series = [{"week": w, "revenue": int(round(weekly[w]))} for w in weeks]
 
-    # ---- demand by day of week ----
+    def week_holidays(w):
+        start = datetime.strptime(w, "%Y-%m-%d")
+        names = []
+        for i in range(7):
+            h = holiday_of(start + timedelta(days=i))
+            if h and h[0] in ("erev", "chag") and h[1].replace("ערב ", "") not in names:
+                names.append(h[1].replace("ערב ", ""))
+        return names
+    weekly_series = [{"week": w, "revenue": int(round(weekly[w])), "holidays": week_holidays(w)}
+                     for w in weeks]
+
+    # ---- demand by day of week (ordinary days only: an eve of a holiday on
+    # a Friday would otherwise make every Friday look bigger) ----
     dow_rev = [0.0] * 7
     dow_days = [set() for _ in range(7)]
     for name, hist in sales.items():
         for d, q in hist:
-            if d is None:
+            if d is None or holiday_of(d):
                 continue
             i = _he_dow(d)
             dow_rev[i] += rev(name, q)
@@ -2652,18 +2873,34 @@ def trends(store_id):
                    key=lambda x: x["avg_revenue"], default=None)
 
     # ---- per-product: which day carries it, and is it rising ----
+    # days the store was open (had any sale) and that were ordinary days
+    open_days = sorted(set(d.date() for d in all_dates))
+    normal_days = [d for d in open_days if not holiday_of(d)]
+    excluded_days = len(open_days) - len(normal_days)
+    if normal_days:
+        mid_day = normal_days[0] + (normal_days[-1] - normal_days[0]) / 2
+        first_days = [d for d in normal_days if d <= mid_day]
+        second_days = [d for d in normal_days if d > mid_day]
+    else:
+        first_days = second_days = []
+
     movers = []
     for name, hist in sales.items():
         dated = sorted([(d, q) for d, q in hist if d is not None], key=lambda x: x[0])
-        if len(dated) < 4:
+        if len(dated) < 4 or not first_days or not second_days:
             continue
-        mid = len(dated) // 2
-        first = sum(q for _, q in dated[:mid])
-        second = sum(q for _, q in dated[mid:])
+        per_day = {}
+        for d, q in dated:
+            per_day[d.date()] = per_day.get(d.date(), 0) + q
+        # average per ordinary open day in each half of the period — so a
+        # holiday week, or one half being longer, doesn't fake a trend
+        first = sum(per_day.get(d, 0) for d in first_days) / len(first_days)
+        second = sum(per_day.get(d, 0) for d in second_days) / len(second_days)
         change = ((second - first) / first * 100) if first else 0.0
         by_day = [0.0] * 7
         for d, q in dated:
-            by_day[_he_dow(d)] += q
+            if not holiday_of(d):
+                by_day[_he_dow(d)] += q
         peak = by_day.index(max(by_day))
         total = sum(by_day) or 1
         movers.append({
@@ -2675,6 +2912,63 @@ def trends(store_id):
             "units": int(round(total)),
         })
     movers.sort(key=lambda m: abs(m["change_pct"]), reverse=True)
+
+    # ---- holidays seen in the data: how much bigger than an ordinary day ----
+    by_date_rev = {}
+    by_date_prod = {}
+    for name, hist in sales.items():
+        for d, q in hist:
+            if d is None:
+                continue
+            k = d.date()
+            by_date_rev[k] = by_date_rev.get(k, 0.0) + rev(name, q)
+            by_date_prod.setdefault(k, {})
+            by_date_prod[k][name] = by_date_prod[k].get(name, 0) + q
+    # typical ordinary day for the same weekday (holidays move around the week)
+    wd_avg = {}
+    for i in range(7):
+        vals = [by_date_rev[d] for d in normal_days if _he_dow(d) == i]
+        wd_avg[i] = (sum(vals) / len(vals)) if vals else None
+    prod_wd_avg = {}
+    for name in sales:
+        for i in range(7):
+            vals = [by_date_prod.get(d, {}).get(name, 0) for d in normal_days if _he_dow(d) == i]
+            prod_wd_avg[(name, i)] = (sum(vals) / len(vals)) if vals else None
+    holiday_effects = []
+    for d in open_days:
+        h = holiday_of(d)
+        if not h or h[0] not in ("erev", "chag"):
+            continue
+        base_day = wd_avg.get(_he_dow(d))
+        if not base_day:
+            continue
+        lift = by_date_rev[d] / base_day
+        best, best_lift = None, 0
+        for name, q in by_date_prod.get(d, {}).items():
+            b = prod_wd_avg.get((name, _he_dow(d)))
+            if b and b >= 2 and q / b > best_lift:
+                best, best_lift = name, q / b
+        if best and best_lift < lift * 1.3:
+            best = None       # it rose with everything else — nothing to single out
+        holiday_effects.append({
+            "date": d.strftime("%Y-%m-%d"), "kind": h[0], "name": h[1],
+            "weekday": HE_DAYS[_he_dow(d)], "lift": round(lift, 1),
+            "top_product": best, "top_product_lift": round(best_lift, 1) if best else None,
+        })
+    closed_holidays = [
+        {"date": k, "name": v[1]} for k, v in sorted(IL_HOLIDAYS.items())
+        if v[0] == "chag" and all_dates
+        and min(all_dates).strftime("%Y-%m-%d") <= k <= max(all_dates).strftime("%Y-%m-%d")
+        and datetime.strptime(k, "%Y-%m-%d").date() not in by_date_rev
+    ]
+    upcoming = upcoming_holidays(datetime.now().date(), 30)
+    eve_lifts = [e["lift"] for e in holiday_effects if e["kind"] == "erev"]
+    for u in upcoming:
+        same = [e for e in holiday_effects if e["name"] == u["name"]]
+        if same:
+            u["last_time"] = same[-1]
+        elif u["kind"] == "erev" and eve_lifts:
+            u["typical_eve_lift"] = round(sum(eve_lifts) / len(eve_lifts), 1)
 
     # ---- one honest headline ----
     insight = None
@@ -2688,6 +2982,30 @@ def trends(store_id):
         top = max(concentrated, key=lambda m: m["peak_share_pct"])
         extra = ("%d%% מהמכירות של %s מרוכזות ביום %s."
                  % (top["peak_share_pct"], top["product"], top["peak_day"]))
+        insight = (insight + " " + extra) if insight else extra
+    soon = next((u for u in upcoming if u["kind"] == "erev" and u["in_days"] <= 14), None)
+    if soon:
+        when = "מחר" if soon["in_days"] == 1 else ("היום" if soon["in_days"] == 0 else "בעוד %d ימים" % soon["in_days"])
+        lt = soon.get("last_time")
+        if lt:
+            head = "%s %s. בפעם הקודמת נמכר פי %.1f מיום רגיל" % (soon["name"], when, lt["lift"])
+            if lt.get("top_product"):
+                head += " (%s — פי %.1f)" % (lt["top_product"], lt["top_product_lift"])
+        elif soon.get("typical_eve_lift"):
+            head = "%s %s. בערבי חג בנתונים שלך נמכר בממוצע פי %.1f מיום רגיל" % (
+                soon["name"], when, soon["typical_eve_lift"])
+        else:
+            head = "%s %s. אין עדיין ערב חג בנתונים שלך להשוואה" % (soon["name"], when)
+        head += " — כדאי להגדיל הזמנות מראש."
+        insight = (head + " " + insight) if insight else head
+    big = [e for e in holiday_effects if e["lift"] >= 1.5]
+    if big:
+        e = max(big, key=lambda x: x["lift"])
+        extra = "ב%s (%s) נמכר פי %.1f מיום %s רגיל" % (e["name"], e["date"][8:10] + "/" + e["date"][5:7],
+                                                      e["lift"], e["weekday"])
+        if e["top_product"]:
+            extra += "; %s — פי %.1f" % (e["top_product"], e["top_product_lift"])
+        extra += "."
         insight = (insight + " " + extra) if insight else extra
 
     return jsonify({
@@ -2703,6 +3021,10 @@ def trends(store_id):
         "source": "own_sales",
         "metric": metric,
         "week_starts": "sunday",
+        "holiday_days_excluded": excluded_days,
+        "holiday_effects": holiday_effects,
+        "closed_on_holidays": closed_holidays,
+        "upcoming_holidays": upcoming,
         "not_enough_weeks": len(weekly_series) < 2,
         "partial_weeks_dropped": partial_dropped,
     })
@@ -2725,17 +3047,28 @@ BAKERY_ITEMS = [
 ]
 
 
-def build_bakery_csv(weeks=8):
-    """Daily sales with real weekday shape, so trends have something to find."""
-    from datetime import datetime, timedelta
+# eve of a holiday: round challot and cakes fly, bread a little less
+BAKERY_EVE = {"חלה מתוקה": 3.5, "עוגת שמרים שוקולד": 2.5, "רוגלך (100 גר')": 2.0}
+
+
+def build_bakery_csv(weeks=12):
+    """
+    Daily sales with a real weekday shape, running through Rosh Hashana and
+    Yom Kippur 2026: closed on the holidays, very busy on their eves.
+    """
     rows = ["date,product,qty"]
-    start = datetime(2026, 7, 6)  # a Monday
+    start = datetime(2026, 6, 29)  # a Monday; 12 weeks end on erev Yom Kippur
     for w in range(weeks):
         for offset in range(7):
             day = start + timedelta(days=w * 7 + offset)
             dow = (day.weekday() + 1) % 7  # Sunday = 0
+            h = holiday_of(day)
+            if h and h[0] == "chag":
+                continue
             for name, base, _price, shape, drift in BAKERY_ITEMS:
                 qty = base * shape[dow] * (1 + drift * w)
+                if h and h[0] == "erev":
+                    qty *= BAKERY_EVE.get(name, 1.5)
                 # a little texture so the data isn't suspiciously smooth
                 qty *= 1 + (((w * 7 + offset + len(name)) % 5) - 2) * 0.04
                 qty = int(round(qty))
@@ -2762,7 +3095,7 @@ def build_bakery_demo(db):
         "demo": True,
         "stock": {"עוגיות חמאה 250 גר'": 40},
         "prices": prices,
-        "sales_csv": build_bakery_csv(8),
+        "sales_csv": build_bakery_csv(12),
         "data_source": "demo",
     }
     _save_rule_analysis(db, sid)
