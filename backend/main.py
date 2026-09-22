@@ -2685,7 +2685,7 @@ def trends(store_id):
                        % (busiest["day"], ratio, quietest["day"]))
     concentrated = [m for m in movers if m["peak_share_pct"] >= 35]
     if concentrated:
-        top = concentrated[0]
+        top = max(concentrated, key=lambda m: m["peak_share_pct"])
         extra = ("%d%% מהמכירות של %s מרוכזות ביום %s."
                  % (top["peak_share_pct"], top["product"], top["peak_day"]))
         insight = (insight + " " + extra) if insight else extra

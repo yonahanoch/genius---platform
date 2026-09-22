@@ -733,6 +733,11 @@ def test_signup_still_works_past_the_welcome_cap():
         main.ONBOARD_DAILY_CAP = old
 
 
+def test_trend_insight_names_the_most_concentrated_product():
+    t = C.get("/trends/demo_bakery").json
+    assert "65% מהמכירות של חלה מתוקה מרוכזות ביום שישי" in t["insight"], t["insight"]
+
+
 def test_nightly_runs_once_per_day():
     main.nightly_job()
     first = main.load_db()["meta"]["nightly_last"]
