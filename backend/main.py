@@ -1188,6 +1188,78 @@ def admin_dashboard():
         }
     })
 
+@app.route("/admin/summary")
+def admin_summary():
+    """Everything the admin screen shows — real numbers only."""
+    err = require_admin()
+    if err:
+        return err
+    db = load_db()
+    today = datetime.now().date()
+    stores, alerts = [], []
+    for sid, s in db.get("stores", {}).items():
+        analysis, latest = latest_analysis(db, sid)
+        sales = parse_sales_csv(s.get("sales_csv") or "")
+        dates = [d for h in sales.values() for d, _ in h if d is not None]
+        last_day = max(dates).date() if dates else None
+        prices = s.get("prices") or {}
+        metric = "revenue" if (sales and price_coverage(sales, prices) >= 0.5) else "units"
+        units, span = recent_sales(sales, 28) if sales else ({}, 0)
+        weeks = (span / 7.0) if span else 0
+        price_of = _stock_lookup(prices)
+        weekly = (sum(u * (price_of(n) or 0) for n, u in units.items()) / weeks) if (weeks and metric == "revenue") \
+            else ((sum(units.values()) / weeks) if weeks else 0)
+        dead = analysis.get("dead_products") or []
+        hot = [p for p in (analysis.get("hot_products") or []) if (p.get("order_quantity") or 0) > 0]
+        row = {
+            "store_id": sid, "name": s.get("name") or sid, "demo": bool(s.get("demo")),
+            "plan": s.get("plan") or ("demo" if s.get("demo") else "trial"),
+            "active": s.get("active", True), "entitled": is_entitled(s),
+            "trial_ends": s.get("trial_ends"), "joined": s.get("joined"),
+            "has_phone": bool(normalize_phone(s.get("phone"))),
+            "network_opt_in": bool(s.get("network_opt_in")),
+            "data_source": s.get("data_source"), "imported_at": s.get("imported_at"),
+            "products": len(sales), "stock_known": bool(s.get("stock")),
+            "metric": metric, "weekly": int(round(weekly)),
+            "last_sale_date": last_day.strftime("%Y-%m-%d") if last_day else None,
+            "data_age_days": (today - last_day).days if last_day else None,
+            "analysis_source": analysis.get("source") or ("ai" if latest else None),
+            "analysis_at": (latest or {}).get("created"),
+            "dead": len(dead), "to_order": len(hot),
+            "queued_reports": len(s.get("report_queue") or []),
+            "token_set": bool(s.get("token_hash")),
+        }
+        stores.append(row)
+        for p in hot[:2]:
+            alerts.append({"store_id": sid, "store": row["name"], "kind": "order",
+                           "text": "%s — נגמר בעוד %s ימים, להזמין %s יח'"
+                                   % (p.get("name"), p.get("days_until_empty"), p.get("order_quantity"))})
+        for p in dead[:2]:
+            alerts.append({"store_id": sid, "store": row["name"], "kind": "dead",
+                           "text": "%s — %s" % (p.get("name"), p.get("reason") or "לא זז")})
+    stores.sort(key=lambda r: (r["demo"], r["name"]))
+    real = [r for r in stores if not r["demo"]]
+    return jsonify({
+        "stores": stores,
+        "alerts": alerts[:20],
+        "suppliers": len(db.get("suppliers") or {}),
+        "stats": {
+            "real_stores": len(real),
+            "paying": len([r for r in real if r["plan"] == "paid"]),
+            "trial": len([r for r in real if r["plan"] == "trial" and r["entitled"]]),
+            "expired": len([r for r in real if not r["entitled"]]),
+            "with_data": len([r for r in real if r["products"]]),
+            "stale_data": len([r for r in real if r["data_age_days"] is not None and r["data_age_days"] > 14]),
+            "queued_reports": sum(r["queued_reports"] for r in real),
+        },
+        "channels": {
+            "whatsapp": bool(TWILIO_SID), "payments": bool(STRIPE_KEY and STRIPE_WEBHOOK_SECRET),
+            "ai_chat": bool(ANTHROPIC_KEY), "public_url": PUBLIC_URL or None,
+        },
+        "generated_at": datetime.now().isoformat(),
+    })
+
+
 @app.route("/admin/store/<store_id>/reset-token", methods=["POST"])
 def admin_reset_token(store_id):
     """Issue a new access code (e.g. an owner lost theirs, or an older store

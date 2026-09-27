@@ -863,51 +863,19 @@ select.fi { cursor: pointer; }
         </div>
       </div>
 
-      <!-- ═══ ADMIN: Dashboard ═══ -->
+      <!-- ═══ ADMIN: Dashboard (live) ═══ -->
       <div class="sc" id="sc-dashboard">
-        <div class="metrics">
-          <div class="mc"><div class="ml">חנויות פעילות</div><div class="mv">12</div><div class="ms">↑ +2 השבוע</div></div>
-          <div class="mc"><div class="ml">המלצות שנשלחו</div><div class="mv">87</div><div class="ms">↑ +14 היום</div></div>
-          <div class="mc"><div class="ml">חיסכון ממוצע</div><div class="mv">₪2,340</div><div class="ms">לחנות/חודש</div></div>
-          <div class="mc"><div class="ml">שיעור מימוש</div><div class="mv">73%</div><div class="ms">↑ גבוה מממוצע</div></div>
-        </div>
-        <div class="sec">התראות אחרונות</div>
-        <div class="ai-row"><div class="aico w"><i class="ti ti-trending-down"></i></div><div style="flex:1"><div class="at">מוצר מת — שמפו Kerastase, כהן פארם</div><div class="ad">23 יח', 67 ימים ללא מכירה. הורד ל-₪68</div></div><span style="font-size:11px;color:var(--text3);flex-shrink:0">4 דק'</span></div>
-        <div class="ai-row"><div class="aico g"><i class="ti ti-trending-up"></i></div><div style="flex:1"><div class="at">מוצר חם — ג'ל שיניים X3, לוי בריאות</div><div class="ad">מכירות +340%. הגדל מלאי ל-80 יח'</div></div><span style="font-size:11px;color:var(--text3);flex-shrink:0">11 דק'</span></div>
-        <div class="ai-row"><div class="aico b"><i class="ti ti-arrows-exchange"></i></div><div style="flex:1"><div class="at">הזדמנות רשת — העברת מלאי</div><div class="ad">5 חנויות חסרות, 2 עם עודף. תאם ישירות</div></div><span style="font-size:11px;color:var(--text3);flex-shrink:0">18 דק'</span></div>
+        <div id="admin-body"><div class="net-card"><div class="net-sub">טוען נתוני מנהל…</div></div></div>
       </div>
 
-      <!-- ═══ ADMIN: Stores ═══ -->
+      <!-- ═══ ADMIN: Stores (live) ═══ -->
       <div class="sc" id="sc-stores">
-        <table class="tbl">
-          <thead><tr><th style="width:25%">חנות</th><th style="width:18%">בעלים</th><th style="width:12%">עיר</th><th style="width:14%">מערכת</th><th style="width:12%">סטטוס</th><th style="width:10%">מנוי</th><th style="width:9%">חיבור</th></tr></thead>
-          <tbody>
-            <tr><td>כהן פארם</td><td>דוד כהן</td><td>ת"א</td><td>Priority</td><td><span class="pill g"><span class="dot"></span>פעיל</span></td><td><span class="pill b">Pro</span></td><td>API</td></tr>
-            <tr><td>לוי בריאות</td><td>שרה לוי</td><td>י-ם</td><td>חשבשבת</td><td><span class="pill g"><span class="dot"></span>פעיל</span></td><td><span class="pill b">Pro</span></td><td>API</td></tr>
-            <tr><td>מרכז הטיפוח</td><td>רון שמיר</td><td>חיפה</td><td>אחר</td><td><span class="pill g"><span class="dot"></span>פעיל</span></td><td><span class="pill g">Basic</span></td><td>CSV</td></tr>
-            <tr><td>ביוטי פלוס</td><td>מיכל אור</td><td>ראשל"צ</td><td>Priority</td><td><span class="pill a"><span class="dot"></span>ממתין</span></td><td>—</td><td>—</td></tr>
-            <tr><td>נייל סטור</td><td>טל בן דוד</td><td>ב"ש</td><td>—</td><td><span class="pill b"><span class="dot"></span>חדש</span></td><td>—</td><td>—</td></tr>
-          </tbody>
-        </table>
+        <div id="admin-stores"><div class="net-card"><div class="net-sub">טוען חנויות…</div></div></div>
       </div>
 
-      <!-- ═══ ADMIN: Alerts ═══ -->
+      <!-- ═══ ADMIN: Alerts (live) ═══ -->
       <div class="sc" id="sc-alerts-admin">
-        <div class="ai-row">
-          <div class="aico w"><i class="ti ti-trending-down"></i></div>
-          <div style="flex:1"><div class="at">שמפו Kerastase — כהן פארם</div><div class="ad">67 ימים ללא מכירה. המלצה: הורד ל-₪68</div></div>
-          <button class="btn btnp">שלח WhatsApp</button>
-        </div>
-        <div class="ai-row">
-          <div class="aico g"><i class="ti ti-trending-up"></i></div>
-          <div style="flex:1"><div class="at">ג'ל שיניים X3 — לוי בריאות</div><div class="ad">+340% מכירות. הגדל מלאי ל-80 יח'</div></div>
-          <button class="btn btnp">שלח WhatsApp</button>
-        </div>
-        <div class="ai-row">
-          <div class="aico b"><i class="ti ti-arrows-exchange"></i></div>
-          <div style="flex:1"><div class="at">הזדמנות העברת מלאי ברשת</div><div class="ad">5 חנויות חסרות, 2 עם עודף</div></div>
-          <button class="btn">תאם העברה</button>
-        </div>
+        <div id="admin-alerts"><div class="net-card"><div class="net-sub">טוען התראות…</div></div></div>
       </div>
 
       <!-- ═══ ADMIN: Onboard ═══ -->
@@ -1222,12 +1190,16 @@ function gxAddMine(id, name, token) {
 }
 function gxTokenFor(id) { const m = gxMine()[id]; return m && m.token; }
 
+function gxAdminToken() { try { return localStorage.getItem('gx_admin') || ''; } catch (e) { return ''; } }
+function gxSetAdminToken(v) { try { v ? localStorage.setItem('gx_admin', v) : localStorage.removeItem('gx_admin'); } catch (e) {} }
+
 // fetch with the current store's key; returns {ok, status, data}
 async function gxFetch(path, opts) {
   opts = opts || {};
   const headers = Object.assign({}, opts.headers || {});
   const tok = gxTokenFor(opts.storeId || gxStore());
   if (tok) headers['X-Store-Token'] = tok;
+  if (opts.admin && gxAdminToken()) headers['X-Admin-Token'] = gxAdminToken();
   const res = await fetch(gxApi() + path, Object.assign({}, opts, { headers }));
   let data = {};
   try { data = await res.json(); } catch (e) {}
@@ -1508,6 +1480,133 @@ async function loadProduction(date) {
       gxEsc(d.date.slice(8,10) + '/' + d.date.slice(5,7)) + '</div>' + table +
     '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + gxEsc(d.based_on_days) +
       ' ימי מכירה רגילים בשמונה השבועות האחרונים שבנתונים. הטווח הוא הפיזור בפועל של אותו יום בשבוע.</div>';
+}
+
+// ═══ Admin screens — live data behind the admin token ═══
+let __gxAdmin = null;
+
+function gxAdminLogin(msg) {
+  return '<div class="net-card"><div class="net-title">כניסת מנהל</div>' +
+    '<div class="net-sub">' + gxEsc(msg || 'הזן את קוד המנהל (ADMIN_TOKEN שהוגדר בשרת).') + '</div>' +
+    '<div class="fg" style="margin-top:8px"><input class="fi" id="admin-token" type="password" dir="ltr" placeholder="ADMIN_TOKEN"></div>' +
+    '<div class="net-row" style="margin-top:10px"><button class="btn btnp" onclick="gxAdminSave()">כניסה</button>' +
+    (gxAdminToken() ? '<button class="btn" onclick="gxSetAdminToken(\'\'); loadAdmin();">התנתק</button>' : '') + '</div></div>';
+}
+function gxAdminSave() {
+  const v = (document.getElementById('admin-token') || {}).value || '';
+  gxSetAdminToken(v.trim());
+  loadAdmin(gxCurrentScreen());
+}
+
+async function loadAdmin(which) {
+  which = which || gxCurrentScreen();
+  const boxes = { dashboard: 'admin-body', stores: 'admin-stores', 'alerts-admin': 'admin-alerts' };
+  const box = document.getElementById(boxes[which] || 'admin-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">טוען…</div></div>';
+  let r;
+  try { r = await gxFetch('/admin/summary', { admin: true }); }
+  catch (e) { box.innerHTML = gxMsgCard('אין חיבור לשרת', '', 'loadAdmin'); return; }
+  if (r.status === 401) { box.innerHTML = gxAdminLogin(gxAdminToken() ? 'הקוד לא מתאים. נסה שוב.' : null); return; }
+  if (!r.ok) { box.innerHTML = gxMsgCard('שגיאה', r.data.error || ''); return; }
+  __gxAdmin = r.data;
+  if (which === 'stores') return gxAdminStores(box);
+  if (which === 'alerts-admin') return gxAdminAlerts(box);
+  return gxAdminDashboard(box);
+}
+
+function gxAdminDashboard(box) {
+  const d = __gxAdmin, st = d.stats, ch = d.channels;
+  const card = (label, value, sub) => '<div class="mc"><div class="ml">' + label + '</div><div class="mv">' +
+    gxEsc(value) + '</div><div class="ms">' + gxEsc(sub || '') + '</div></div>';
+  const chRow = (label, on, offTxt) => '<div class="setting-row"><div><div class="setting-label">' + label + '</div>' +
+    '<div class="setting-sub">' + (on ? 'מחובר' : gxEsc(offTxt)) + '</div></div>' +
+    '<span class="pill ' + (on ? 'g' : 'a') + '"><span class="dot"></span>' + (on ? 'פעיל' : 'לא מחובר') + '</span></div>';
+  box.innerHTML =
+    '<div class="metrics">' +
+      card('חנויות אמיתיות', st.real_stores, st.with_data + ' עם נתונים') +
+      card('משלמות', st.paying, st.trial + ' בתקופת ניסיון') +
+      card('פג תוקף', st.expired, 'ניסיון שהסתיים בלי תשלום') +
+      card('נתונים ישנים', st.stale_data, 'לא עודכנו מעל 14 יום') +
+    '</div>' +
+    '<div class="sec" style="margin-top:20px">חיבורים חיצוניים</div>' +
+    chRow('WhatsApp (Twilio)', ch.whatsapp, 'דוחות נשמרים בתור: ' + st.queued_reports) +
+    chRow('תשלומים (Stripe)', ch.payments, 'צריך מפתח ו-Webhook חתום') +
+    chRow('צ׳אט AI', ch.ai_chat, 'חסר מפתח') +
+    '<div class="sec" style="margin-top:20px">התראות מכל החנויות</div>' +
+    (d.alerts.length ? d.alerts.slice(0, 8).map(gxAlertRow).join('')
+      : '<div class="net-card"><div class="net-sub">אין התראות פתוחות.</div></div>') +
+    '<div class="net-sub" style="margin-top:12px;font-size:11px">כל המספרים מחושבים מהנתונים שבשרת · עודכן ' +
+      gxEsc((d.generated_at || '').slice(11, 16)) + '</div>';
+}
+
+function gxAlertRow(a) {
+  const ico = a.kind === 'order' ? ['g', 'ti-trending-up'] : ['w', 'ti-trending-down'];
+  return '<div class="ai-row"><div class="aico ' + ico[0] + '"><i class="ti ' + ico[1] + '"></i></div>' +
+    '<div style="flex:1"><div class="at">' + gxEsc(a.store) + '</div><div class="ad">' + gxEsc(a.text) + '</div></div></div>';
+}
+
+function gxAdminAlerts(box) {
+  const d = __gxAdmin;
+  box.innerHTML = d.alerts.length
+    ? d.alerts.map(gxAlertRow).join('')
+    : '<div class="net-card"><div class="net-sub">אין התראות פתוחות בשום חנות.</div></div>';
+}
+
+function gxAdminStores(box) {
+  const rows = __gxAdmin.stores.map((r, i) => {
+    const plan = { paid: ['g', 'משלמת'], trial: ['b', 'ניסיון'], demo: ['b', 'דמו'], canceled: ['a', 'בוטל'] }[r.plan] || ['a', gxEsc(r.plan)];
+    const data = r.products
+      ? gxEsc(r.products) + ' מוצרים · ' + (r.data_age_days > 14 ? '<span style="color:var(--amber)">נתונים מלפני ' + gxEsc(r.data_age_days) + ' ימים</span>'
+          : 'עודכן לפני ' + gxEsc(r.data_age_days) + ' ימים')
+      : '<span style="color:var(--text3)">אין נתונים</span>';
+    const actions = r.demo ? '—'
+      : '<button class="btn" style="font-size:10px;padding:3px 8px" onclick="gxAdminAction(' + i + ',\'token\',this)">קוד גישה חדש</button> ' +
+        '<button class="btn" style="font-size:10px;padding:3px 8px;color:var(--red);border-color:var(--red-dim)" onclick="gxAdminAction(' + i + ',\'delete\',this)">מחק</button>';
+    return '<tr><td>' + gxEsc(r.name) + '<div style="font-size:10px;color:var(--text3)" dir="ltr">' + gxEsc(r.store_id) + '</div></td>' +
+      '<td><span class="pill ' + plan[0] + '">' + plan[1] + '</span>' + (r.entitled ? '' : ' <span class="pill a">לא פעיל</span>') + '</td>' +
+      '<td>' + data + '</td>' +
+      '<td>' + (r.metric === 'revenue' ? gxMoney(r.weekly) : gxEsc(r.weekly) + " יח'") + '</td>' +
+      '<td>' + gxEsc(r.to_order) + ' / ' + gxEsc(r.dead) + '</td>' +
+      '<td>' + (r.has_phone ? 'טלפון' : '—') + (r.network_opt_in ? ' · רשת' : '') + (r.queued_reports ? ' · ' + gxEsc(r.queued_reports) + ' דוחות בתור' : '') + '</td>' +
+      '<td>' + actions + '</td></tr>';
+  }).join('');
+  box.innerHTML =
+    '<div class="net-row" style="margin-bottom:12px"><div class="sec" style="margin:0">כל החנויות (' + gxEsc(__gxAdmin.stores.length) + ')</div>' +
+      '<button class="btn" onclick="gxAdminSeed()">רענן חנויות דמו</button></div>' +
+    '<table class="tbl"><thead><tr><th style="width:24%">חנות</th><th style="width:14%">מנוי</th>' +
+      '<th style="width:20%">נתונים</th><th style="width:12%">מכירות/שבוע</th>' +
+      '<th style="width:10%">להזמין/תקוע</th><th style="width:12%">חיבורים</th><th style="width:8%"></th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div id="admin-status" role="status" style="font-size:12px;color:var(--text2);margin-top:10px"></div>';
+}
+
+async function gxAdminAction(i, what, btn) {
+  const r = (__gxAdmin.stores || [])[i];
+  const st = document.getElementById('admin-status');
+  if (!r) return;
+  if (btn.dataset.armed !== what) {     // two steps, so nothing destructive happens on one click
+    btn.dataset.armed = what;
+    btn.textContent = what === 'delete' ? 'לאישור — לחץ שוב' : 'לאישור — לחץ שוב';
+    setTimeout(() => { if (btn.dataset.armed === what) { btn.dataset.armed = ''; btn.textContent = what === 'delete' ? 'מחק' : 'קוד גישה חדש'; } }, 5000);
+    return;
+  }
+  btn.dataset.armed = '';
+  const path = what === 'delete' ? '/admin/store/' + encodeURIComponent(r.store_id)
+                                 : '/admin/store/' + encodeURIComponent(r.store_id) + '/reset-token';
+  const res = await gxFetch(path, { method: what === 'delete' ? 'DELETE' : 'POST', admin: true });
+  if (!res.ok) { st.textContent = res.data.error || 'הפעולה נכשלה'; return; }
+  st.textContent = what === 'delete' ? 'החנות נמחקה' :
+    'קוד גישה חדש ל-' + r.name + ': ' + res.data.store_token + ' — למסור לבעל החנות';
+  const keep = st.textContent;
+  await loadAdmin('stores');
+  document.getElementById('admin-status').textContent = keep;
+}
+
+async function gxAdminSeed() {
+  const res = await gxFetch('/admin/seed-demo', { method: 'POST', admin: true });
+  gxToast(res.ok ? 'חנויות הדמו רועננו' : (res.data.error || 'נכשל'), !res.ok);
+  loadAdmin('stores');
 }
 
 // ═══ Weekly WhatsApp report ═══
@@ -2095,6 +2194,7 @@ function show(id) {
   if (id === 'lending') loadLending();
   if (id === 'production') loadProduction();
   if (id === 'report') loadReport();
+  if (id === 'dashboard' || id === 'stores' || id === 'alerts-admin') loadAdmin(id);
   if (id === 'onboard') obReset();
 }
 
@@ -2242,7 +2342,7 @@ async function sendChat(role) {
 }
 
 // ── Mockup screens are labelled so nobody mistakes them for live data ──
-const GX_MOCKUPS = ['ads', 'settings', 'dashboard', 'stores', 'alerts-admin', 'admin-chat',
+const GX_MOCKUPS = ['ads', 'settings', 'admin-chat',
   'sup-dashboard', 'sup-orders', 'sup-quotes', 'sup-history', 'sup-catalog', 'sup-delivery', 'sup-settings'];
 function gxLabelMockups() {
   GX_MOCKUPS.forEach(id => {
