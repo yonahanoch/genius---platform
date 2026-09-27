@@ -2041,7 +2041,9 @@ async function loadTrends() {
     '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + gxEsc(d.based_on_days) + ' ימי מכירה שלך' +
       (d.partial_weeks_dropped ? '; שבועות חלקיים בקצוות לא מוצגים בגרף' : '') +
       (d.holiday_days_excluded ? '; ' + gxEsc(d.holiday_days_excluded) + ' ימי חג וערבי חג לא נכללו בהשוואת הימים ובמגמות המוצרים' : '') +
-      '.' + closedTxt + ' לוח החגים: ישראל, 2024–2028.</div>';
+      '.' + closedTxt +
+      (d.holiday_calendar_years ? ' לוח החגים: ישראל, ' + gxEsc(String(d.holiday_calendar_years).replace('-', '–')) + '.' : '') +
+    '</div>';
 
   if (typeof Chart === 'undefined') return;
   const ink = 'rgba(255,255,255,.55)', grid = 'rgba(255,255,255,.07)';

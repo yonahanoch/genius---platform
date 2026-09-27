@@ -1112,6 +1112,18 @@ def test_portal_code_only_from_the_store_that_owns_the_supplier():
     assert C.post("/suppliers/%s/%s/portal-code" % (sid, sup)).status_code == 403
 
 
+def test_trends_reports_the_real_holiday_calendar_range():
+    """The site used to hardcode "2024-2028" while the table went further."""
+    years = sorted({k[:4] for k in main.IL_HOLIDAYS})
+    expected = years[0] + "-" + years[-1]
+    assert main.holiday_calendar_years() == expected
+    body = C.get("/trends/demo_bakery").json
+    assert body["holiday_calendar_years"] == expected
+    # every year in the claimed range really has holidays in the table
+    for y in range(int(years[0]), int(years[-1]) + 1):
+        assert any(k.startswith(str(y)) for k in main.IL_HOLIDAYS), y
+
+
 def test_nightly_runs_once_per_day():
     main.nightly_job()
     first = main.load_db()["meta"]["nightly_last"]

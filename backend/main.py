@@ -3163,6 +3163,12 @@ IL_HOLIDAYS = {
 }
 
 
+def holiday_calendar_years():
+    """The years the holiday table actually covers, e.g. "2024-2032"."""
+    years = sorted({k[:4] for k in IL_HOLIDAYS})
+    return years[0] + "-" + years[-1]
+
+
 def holiday_of(d):
     """(kind, name) for a date/datetime, or None on an ordinary day."""
     key = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
@@ -3419,6 +3425,7 @@ def trends(store_id):
         "holiday_effects": holiday_effects,
         "closed_on_holidays": closed_holidays,
         "upcoming_holidays": upcoming,
+        "holiday_calendar_years": holiday_calendar_years(),
         "not_enough_weeks": len(weekly_series) < 2,
         "partial_weeks_dropped": partial_dropped,
     })
