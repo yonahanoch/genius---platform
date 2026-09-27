@@ -569,6 +569,52 @@ select.fi { cursor: pointer; }
   color: var(--green);
 }
 
+/* ── Phone layout ──
+   Under 820px the sidebar becomes a slide-in menu, cards stack, and tables
+   scroll sideways instead of squeezing Hebrew text into unreadable columns. */
+.menu-btn { display: none; }
+.scrim { display: none; }
+
+@media (max-width: 820px) {
+  .role-bar { padding: 0 8px; overflow-x: auto; }
+  .role-btn { padding: 10px 12px; font-size: 12px; white-space: nowrap; }
+  .shell { height: auto; min-height: calc(100vh - 43px); overflow: visible; }
+  .sidebar {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
+    width: 82vw; max-width: 320px;
+    transform: translateX(100%); transition: transform .2s ease;
+    box-shadow: -8px 0 24px rgba(0,0,0,.35);
+  }
+  body.menu-open .sidebar { transform: translateX(0); }
+  body.menu-open .scrim {
+    display: block; position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.5);
+  }
+  .menu-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 38px; height: 38px; border-radius: var(--radius);
+    border: 1px solid var(--border2); background: var(--bg2); color: var(--text);
+    font-size: 20px; cursor: pointer; flex-shrink: 0;
+  }
+  .main { overflow: visible; }
+  .topbar { padding: 0 12px; gap: 10px; }
+  .ptitle { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .content { padding: 12px; overflow: visible; }
+  .metrics { grid-template-columns: repeat(2, 1fr) !important; gap: 8px; }
+  .mc { padding: 10px 12px; }
+  .mv { font-size: 18px; }
+  .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tbl { table-layout: auto; min-width: 560px; }
+  .net-row { flex-wrap: wrap; gap: 8px; }
+  .chart-area { height: 200px !important; }
+  .fi, .btn { font-size: 16px; }          /* 16px stops iOS zooming on focus */
+  .chat-shell { height: auto; min-height: 60vh; }
+  pre { overflow-x: auto; }
+}
+
+@media (max-width: 420px) {
+  .metrics { grid-template-columns: 1fr !important; }
+}
+
 /* ── Scrollbar global ── */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
@@ -600,6 +646,7 @@ select.fi { cursor: pointer; }
   </button>
 </div>
 
+<div class="scrim" onclick="gxToggleMenu(false)"></div>
 <div class="shell">
 
   <!-- Sidebar -->
@@ -657,6 +704,7 @@ select.fi { cursor: pointer; }
   <!-- Main -->
   <div class="main">
     <div class="topbar">
+      <button class="menu-btn" onclick="gxToggleMenu()" aria-label="תפריט"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
       <div class="ptitle" id="ptitle">סקירה — כהן פארם</div>
       <div id="topaction"></div>
     </div>
@@ -2349,7 +2397,23 @@ async function gxRestoreStore() {
   } catch (e) { out.textContent = 'אין חיבור לשרת'; }
 }
 
+function gxToggleMenu(force) {
+  const open = force === undefined ? !document.body.classList.contains('menu-open') : !!force;
+  document.body.classList.toggle('menu-open', open);
+}
+
+function gxWrapTables(root) {
+  (root || document).querySelectorAll('table.tbl').forEach(t => {
+    if (t.parentElement && t.parentElement.classList.contains('tbl-wrap')) return;
+    const w = document.createElement('div');
+    w.className = 'tbl-wrap';
+    t.parentNode.insertBefore(w, t);
+    w.appendChild(t);
+  });
+}
+
 function show(id) {
+  gxToggleMenu(false);
   document.querySelectorAll('.sc').forEach(s => s.classList.remove('on'));
   const el = document.getElementById('sc-' + id);
   if (el) el.classList.add('on');
@@ -2374,6 +2438,7 @@ function show(id) {
   if (id === 'ads') loadPromotions();
   if (id === 'dashboard' || id === 'stores' || id === 'alerts-admin') loadAdmin(id);
   if (id === 'onboard') obReset();
+  setTimeout(() => gxWrapTables(document.getElementById('sc-' + id)), 60);
 }
 
 function switchRole(role) {
@@ -2546,7 +2611,17 @@ function gxLabelMockups() {
     });
   }
 
-document.addEventListener('DOMContentLoaded', async () => { gxLabelMockups(); await gxLoadStores(); loadOverview(); });
+document.addEventListener('DOMContentLoaded', async () => {
+  gxLabelMockups();
+  gxWrapTables();
+  await gxLoadStores();
+  loadOverview();
+  // tables the loaders render later get wrapped too
+  const content = document.querySelector('.content');
+  if (content && window.MutationObserver) {
+    new MutationObserver(() => gxWrapTables()).observe(content, { childList: true, subtree: true });
+  }
+});
 </script>
 </body>
 </html>
