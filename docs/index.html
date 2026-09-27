@@ -688,16 +688,8 @@ select.fi { cursor: pointer; }
     </nav>
 
     <nav class="nav" id="nav-supplier" style="display:none">
-      <div class="nav-sep">הזמנות</div>
-      <div class="ni on" onclick="show('sup-dashboard')"><i class="ti ti-layout-dashboard"></i> סקירה</div>
-      <div class="ni" onclick="show('sup-orders')"><i class="ti ti-inbox"></i> בקשות פתוחות</div>
-      <div class="ni" onclick="show('sup-quotes')"><i class="ti ti-file-invoice"></i> הצעות מחיר</div>
-      <div class="ni" onclick="show('sup-history')"><i class="ti ti-history"></i> היסטוריה</div>
-      <div class="nav-sep">קטלוג</div>
-      <div class="ni" onclick="show('sup-catalog')"><i class="ti ti-package"></i> המוצרים שלי</div>
-      <div class="ni" onclick="show('sup-delivery')"><i class="ti ti-map-pin"></i> אזורי משלוח</div>
-      <div class="nav-sep">חשבון</div>
-      <div class="ni" onclick="show('sup-settings')"><i class="ti ti-settings"></i> הגדרות</div>
+      <div class="nav-sep">ספק</div>
+      <div class="ni on" onclick="show('sup-dashboard')"><i class="ti ti-inbox"></i> הזמנות שהגיעו אליי</div>
     </nav>
   </div>
 
@@ -929,197 +921,11 @@ select.fi { cursor: pointer; }
         </div>
       </div>
 
-      <!-- ═══ SUPPLIER: Dashboard ═══ -->
+      <!-- ═══ SUPPLIER: Portal (live) ═══ -->
       <div class="sc" id="sc-sup-dashboard">
-        <div style="background:var(--amber-dim);border:1px solid var(--amber);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--amber)">
-          <i class="ti ti-bell"></i>
-          <span>3 בקשות הזמנה חדשות מרשת Genius — ממתינות להצעת מחיר</span>
-          <button class="btn" style="margin-right:auto;font-size:11px;padding:4px 10px;border-color:var(--amber);color:var(--amber)" onclick="show('sup-orders')">צפה עכשיו</button>
-        </div>
-        <div class="metrics">
-          <div class="mc"><div class="ml">הזמנות החודש</div><div class="mv">18</div><div class="ms">↑ +5 מחודש שעבר</div></div>
-          <div class="mc"><div class="ml">הכנסה מהרשת</div><div class="mv">₪42,800</div><div class="ms">↑ +12%</div></div>
-          <div class="mc"><div class="ml">חנויות פעילות</div><div class="mv">9</div><div class="ms">מתוך 12 ברשת</div></div>
-          <div class="mc"><div class="ml">ממוצע משלוח</div><div class="mv">2.3 ימים</div><div class="ms amber">יעד: 2 ימים</div></div>
-        </div>
-        <div class="sec">ביצועים שבועיים</div>
-        <table class="tbl">
-          <thead><tr><th style="width:35%">מוצר</th><th style="width:20%">יחידות</th><th style="width:20%">הכנסה</th><th style="width:25%">ביקוש צפוי</th></tr></thead>
-          <tbody>
-            <tr><td>שמפו Dove 400ml</td><td>340</td><td>₪8,500</td><td><span class="pill g"><span class="dot"></span>עולה</span></td></tr>
-            <tr><td>קרם גוף Vaseline</td><td>210</td><td>₪6,300</td><td><span class="pill g"><span class="dot"></span>יציב</span></td></tr>
-            <tr><td>סבון Lux × 4</td><td>180</td><td>₪4,500</td><td><span class="pill a"><span class="dot"></span>יורד</span></td></tr>
-            <tr><td>דאודורנט Rexona</td><td>155</td><td>₪5,425</td><td><span class="pill g"><span class="dot"></span>עולה</span></td></tr>
-          </tbody>
-        </table>
+        <div id="sup-portal"><div class="net-card"><div class="net-sub">טוען…</div></div></div>
       </div>
 
-      <!-- ═══ SUPPLIER: Open Orders ═══ -->
-      <div class="sc" id="sc-sup-orders">
-        <div class="sec" style="margin-bottom:12px">3 בקשות ממתינות להצעת מחיר</div>
-
-        <div class="net-card" id="ocard1">
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
-            <div><div class="net-title">הזמנה קבוצתית — שמפו Dove 400ml</div><div class="net-sub">7 חנויות ברשת · 420 יחידות · נדרש עד מחר</div></div>
-            <span class="pill a"><span class="dot"></span>דחוף</span>
-          </div>
-          <div style="display:flex;gap:14px;font-size:11px;color:var(--text2);margin-bottom:10px">
-            <span><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-2px"></i> ת"א, י-ם, חיפה</span>
-            <span><i class="ti ti-clock" style="font-size:12px;vertical-align:-2px"></i> משלוח תוך 3 ימים</span>
-            <span><i class="ti ti-package" style="font-size:12px;vertical-align:-2px"></i> 420 יח'</span>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
-            <span style="font-size:12px;color:var(--text2);white-space:nowrap">מחיר ליח' (₪):</span>
-            <input id="sq1" type="number" placeholder="22.50" style="flex:1;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-size:12px;font-family:var(--font)">
-            <button class="btn btnp" onclick="submitSupQuote('ocard1','sq1','שמפו Dove')">שלח הצעה</button>
-            <button class="btn" style="color:var(--red);border-color:var(--red-dim)">דחה</button>
-          </div>
-        </div>
-
-        <div class="net-card" id="ocard2">
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
-            <div><div class="net-title">בקשת מלאי דחוף — דאודורנט Rexona</div><div class="net-sub">4 חנויות · 200 יחידות · מלאי אוזל ב-5 ימים</div></div>
-            <span class="pill r"><span class="dot"></span>קריטי</span>
-          </div>
-          <div style="display:flex;gap:14px;font-size:11px;color:var(--text2);margin-bottom:10px">
-            <span><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-2px"></i> מרכז הארץ</span>
-            <span><i class="ti ti-clock" style="font-size:12px;vertical-align:-2px"></i> משלוח תוך 24 שעות</span>
-            <span><i class="ti ti-package" style="font-size:12px;vertical-align:-2px"></i> 200 יח'</span>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
-            <span style="font-size:12px;color:var(--text2);white-space:nowrap">מחיר ליח' (₪):</span>
-            <input id="sq2" type="number" placeholder="35.00" style="flex:1;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-size:12px;font-family:var(--font)">
-            <button class="btn btnp" onclick="submitSupQuote('ocard2','sq2','דאודורנט Rexona')">שלח הצעה</button>
-            <button class="btn" style="color:var(--red);border-color:var(--red-dim)">דחה</button>
-          </div>
-        </div>
-
-        <div class="net-card" id="ocard3">
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
-            <div><div class="net-title">הזמנה רגילה — קרם גוף Vaseline 200ml</div><div class="net-sub">3 חנויות · 150 יחידות · תאריך גמיש</div></div>
-            <span class="pill b"><span class="dot"></span>רגיל</span>
-          </div>
-          <div style="display:flex;gap:14px;font-size:11px;color:var(--text2);margin-bottom:10px">
-            <span><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-2px"></i> ירושלים, ב"ש</span>
-            <span><i class="ti ti-clock" style="font-size:12px;vertical-align:-2px"></i> עד שבוע</span>
-            <span><i class="ti ti-package" style="font-size:12px;vertical-align:-2px"></i> 150 יח'</span>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
-            <span style="font-size:12px;color:var(--text2);white-space:nowrap">מחיר ליח' (₪):</span>
-            <input id="sq3" type="number" placeholder="30.00" style="flex:1;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-size:12px;font-family:var(--font)">
-            <button class="btn btnp" onclick="submitSupQuote('ocard3','sq3','קרם גוף Vaseline')">שלח הצעה</button>
-            <button class="btn" style="color:var(--red);border-color:var(--red-dim)">דחה</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- ═══ SUPPLIER: Quotes ═══ -->
-      <div class="sc" id="sc-sup-quotes">
-        <div class="sec" style="margin-bottom:10px">הצעות מחיר פעילות</div>
-        <table class="tbl">
-          <thead><tr><th style="width:28%">מוצר</th><th style="width:13%">כמות</th><th style="width:16%">הצעתי</th><th style="width:16%">מחיר מתחרה</th><th style="width:14%">סטטוס</th><th style="width:13%">פעולה</th></tr></thead>
-          <tbody>
-            <tr><td>שמפו Dove 400ml</td><td>420</td><td>₪22.50</td><td>₪21.80</td><td><span class="pill a">ממתין</span></td><td><button class="btn" style="font-size:10px;padding:3px 8px">עדכן</button></td></tr>
-            <tr><td>קרם SPF 50</td><td>300</td><td>₪28.00</td><td>—</td><td><span class="pill g">אושר</span></td><td><span style="font-size:11px;color:var(--green)">✓ פעיל</span></td></tr>
-            <tr><td>דאודורנט Rexona</td><td>500</td><td>₪34.50</td><td>₪36.00</td><td><span class="pill g">זכית</span></td><td><span style="font-size:11px;color:var(--green)">✓ פעיל</span></td></tr>
-            <tr><td>ג'ל שיניים X3</td><td>200</td><td>₪12.00</td><td>₪11.50</td><td><span class="pill r">הפסדת</span></td><td><button class="btn" style="font-size:10px;padding:3px 8px">הצע שוב</button></td></tr>
-          </tbody>
-        </table>
-        <div class="net-card" style="margin-top:12px">
-          <div style="font-size:12px;font-weight:500;margin-bottom:4px">תובנת AI</div>
-          <div style="font-size:11px;color:var(--text2)">הצעת שמפו Dove גבוהה ב-₪0.70 מהמתחרה. הורדה ל-₪21.50 תגדיל סיכויי זכייה ב-80% — עדיין רווחי בגלל הנפח הגבוה.</div>
-        </div>
-      </div>
-
-      <!-- ═══ SUPPLIER: History ═══ -->
-      <div class="sc" id="sc-sup-history">
-        <div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
-          <div class="mc"><div class="ml">סה"כ הזמנות שנה</div><div class="mv">186</div><div class="ms">↑ +23%</div></div>
-          <div class="mc"><div class="ml">הכנסה שנתית</div><div class="mv">₪420K</div><div class="ms">מרשת Genius</div></div>
-          <div class="mc"><div class="ml">שיעור זכייה</div><div class="mv">74%</div><div class="ms amber">יעד: 80%</div></div>
-        </div>
-        <div class="sec" style="margin-bottom:8px">הזמנות אחרונות</div>
-        <table class="tbl">
-          <thead><tr><th style="width:22%">תאריך</th><th style="width:30%">מוצר</th><th style="width:15%">כמות</th><th style="width:18%">סכום</th><th style="width:15%">סטטוס</th></tr></thead>
-          <tbody>
-            <tr><td>29.05.26</td><td>שמפו Dove</td><td>420</td><td>₪9,450</td><td><span class="pill g">סופק</span></td></tr>
-            <tr><td>25.05.26</td><td>דאודורנט Rexona</td><td>200</td><td>₪6,900</td><td><span class="pill g">סופק</span></td></tr>
-            <tr><td>20.05.26</td><td>קרם Vaseline</td><td>300</td><td>₪8,400</td><td><span class="pill b">במשלוח</span></td></tr>
-            <tr><td>15.05.26</td><td>סבון Lux</td><td>500</td><td>₪7,500</td><td><span class="pill g">סופק</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- ═══ SUPPLIER: Catalog ═══ -->
-      <div class="sc" id="sc-sup-catalog">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="sec" style="margin-bottom:0">הקטלוג שלי — 24 מוצרים</div>
-          <button class="btn btnp" style="font-size:11px"><i class="ti ti-plus"></i> הוסף מוצר</button>
-        </div>
-        <table class="tbl">
-          <thead><tr><th style="width:32%">מוצר</th><th style="width:16%">מחיר רגיל</th><th style="width:18%">מחיר נפח 200+</th><th style="width:18%">מלאי</th><th style="width:16%">פעיל ברשת</th></tr></thead>
-          <tbody>
-            <tr><td>שמפו Dove 400ml</td><td>₪25.00</td><td>₪21.00</td><td>2,400 יח'</td><td><button class="toggle" onclick="this.classList.toggle('off')" style="width:32px;height:18px;border-radius:9px;background:var(--green);position:relative;cursor:pointer;flex-shrink:0;border:none;display:inline-block;transition:background .15s" aria-label="הפעל/כבה"></button></td></tr>
-            <tr><td>קרם גוף Vaseline</td><td>₪32.00</td><td>₪27.00</td><td>1,800 יח'</td><td><button class="toggle" onclick="this.classList.toggle('off')" style="width:32px;height:18px;border-radius:9px;background:var(--green);position:relative;cursor:pointer;flex-shrink:0;border:none;display:inline-block" aria-label="הפעל/כבה"></button></td></tr>
-            <tr><td>דאודורנט Rexona</td><td>₪38.00</td><td>₪33.00</td><td>3,200 יח'</td><td><button class="toggle" onclick="this.classList.toggle('off')" style="width:32px;height:18px;border-radius:9px;background:var(--green);position:relative;cursor:pointer;flex-shrink:0;border:none;display:inline-block" aria-label="הפעל/כבה"></button></td></tr>
-            <tr><td>סבון Lux × 4</td><td>₪18.00</td><td>₪14.50</td><td>5,000 יח'</td><td><button class="toggle" onclick="this.classList.toggle('off')" style="width:32px;height:18px;border-radius:9px;background:var(--green);position:relative;cursor:pointer;flex-shrink:0;border:none;display:inline-block" aria-label="הפעל/כבה"></button></td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- ═══ SUPPLIER: Delivery ═══ -->
-      <div class="sc" id="sc-sup-delivery">
-        <div class="sec" style="margin-bottom:10px">אזורי משלוח וזמנים</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-          <div style="padding:12px;border:1px solid #5DCAA5;background:var(--green-dim);border-radius:var(--radius-sm)">
-            <div style="font-size:12px;font-weight:500;color:var(--green);margin-bottom:4px">מרכז — 1 יום</div>
-            <div style="font-size:11px;color:var(--green)">תל אביב, ר"ג, בני ברק, פ"ת, חולון</div>
-          </div>
-          <div style="padding:12px;border:1px solid #5DCAA5;background:var(--green-dim);border-radius:var(--radius-sm)">
-            <div style="font-size:12px;font-weight:500;color:var(--green);margin-bottom:4px">ירושלים + שפלה — 2 ימים</div>
-            <div style="font-size:11px;color:var(--green)">ירושלים, מודיעין, ראשל"צ, רחובות</div>
-          </div>
-          <div style="padding:12px;border:1px solid #5DCAA5;background:var(--green-dim);border-radius:var(--radius-sm)">
-            <div style="font-size:12px;font-weight:500;color:var(--green);margin-bottom:4px">צפון — 3 ימים</div>
-            <div style="font-size:11px;color:var(--green)">חיפה, נצרת, עפולה, טבריה, עכו</div>
-          </div>
-          <div style="padding:12px;border:1px solid var(--amber);background:var(--amber-dim);border-radius:var(--radius-sm)">
-            <div style="font-size:12px;font-weight:500;color:var(--amber);margin-bottom:4px">דרום — 4 ימים</div>
-            <div style="font-size:11px;color:var(--amber)">באר שבע, אשדוד, אשקלון, אילת</div>
-          </div>
-        </div>
-        <div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text)">
-          <span>משלוח חינם מ-300 יחידות</span>
-          <button onclick="this.style.background=this.style.background===''?'var(--border)':''" style="width:32px;height:18px;border-radius:9px;background:var(--green);position:relative;cursor:pointer;border:none" aria-label="הפעל/כבה"></button>
-        </div>
-        <div style="padding:10px 0;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text)">
-          <span>קבלת הזמנות דחופות (24 שעות)</span>
-          <button onclick="this.style.background=this.style.background===''?'var(--border)':''" style="width:32px;height:18px;border-radius:9px;background:var(--green);position:relative;cursor:pointer;border:none" aria-label="הפעל/כבה"></button>
-        </div>
-      </div>
-
-      <!-- ═══ SUPPLIER: Settings ═══ -->
-      <div class="sc" id="sc-sup-settings">
-        <div style="max-width:400px">
-          <div class="sec" style="margin-bottom:12px">פרטי הספק</div>
-          <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">שם החברה</label>
-          <input style="width:100%;padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-size:13px;font-family:var(--font);margin-bottom:12px" value="ספק לדוגמה בע&quot;מ">
-          <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">איש קשר</label>
-          <input style="width:100%;padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-size:13px;font-family:var(--font);margin-bottom:12px" value="שי כהן">
-          <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">WhatsApp להתראות</label>
-          <input style="width:100%;padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-size:13px;font-family:var(--font);margin-bottom:12px" value="054-0000000">
-          <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">סוג חיבור</label>
-          <select style="width:100%;padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-size:13px;font-family:var(--font);margin-bottom:16px">
-            <option>WhatsApp בלבד</option>
-            <option selected>פורטל ספקים</option>
-            <option>API ישיר</option>
-          </select>
-          <div style="display:flex;gap:8px">
-            <button class="btn">בטל</button>
-            <button class="btn btnp">שמור שינויים</button>
-          </div>
-        </div>
-      </div>
   </div><!-- /main -->
 </div><!-- /shell -->
 
@@ -1131,9 +937,7 @@ const screenTitles = {
   ads: 'מבצעים מוצעים', connect: 'חיבור נתונים', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
   stores: 'ניהול חנויות', 'alerts-admin': 'התראות', onboard: 'צרף חנות חדשה',
   'admin-chat': 'סוכן AI — מנהל',
-  'sup-dashboard': 'סקירה — ספק (הדגמה)', 'sup-orders': 'בקשות פתוחות',
-  'sup-quotes': 'הצעות מחיר', 'sup-history': 'היסטוריית הזמנות',
-  'sup-catalog': 'הקטלוג שלי', 'sup-delivery': 'אזורי משלוח', 'sup-settings': 'הגדרות'
+  'sup-dashboard': 'פורטל ספק'
 };
 
 let curRole = 'store';
@@ -1609,7 +1413,9 @@ async function loadSuppliers() {
       '<div class="net-sub" style="margin-top:6px">מוצרים: ' +
         (sp.products.length ? sp.products.map(gxEsc).join(', ') : '<span style="color:var(--text3)">עוד לא שויכו מוצרים</span>') + '</div>' +
       '<div class="net-row"><button class="btn" onclick="gxSupEdit(' + i + ')">ערוך</button>' +
-        '<button class="btn" style="color:var(--red);border-color:var(--red-dim)" onclick="gxSupRemove(' + i + ',this)">הסר</button></div></div>'
+        '<button class="btn" onclick="gxSupCode(' + i + ')">קוד לפורטל הספק</button>' +
+        '<button class="btn" style="color:var(--red);border-color:var(--red-dim)" onclick="gxSupRemove(' + i + ',this)">הסר</button></div>' +
+      '<div id="sup-code-' + i + '" style="font-size:12px;color:var(--text2);margin-top:6px"></div></div>'
   ).join('') : '<div class="net-card"><div class="net-sub">עוד לא הוספת ספקים. אחרי שתוסיף, נכין לך טיוטת הזמנה לכל ספק.</div></div>';
 
   const form = '<div class="net-card"><div class="net-title" id="sup-form-title">הוספת ספק</div>' +
@@ -1630,6 +1436,26 @@ async function loadSuppliers() {
       '</div></div>').join('')
     : '<div class="net-card"><div class="net-sub">אין כרגע מוצרים שצריך להזמין, או שהם עוד לא שויכו לספק.</div></div>';
 
+  const statusTxt = { open: 'ממתין להצעת מחיר', quoted: 'התקבלה הצעה', accepted: 'אושר', declined: 'נדחה' };
+  const orders = (d.orders || []).length
+    ? '<div class="sec" style="margin:18px 0 12px">הזמנות שנשלחו</div>' + d.orders.map((o, i) => {
+        const q = o.quote
+          ? 'הצעת הספק: ₪' + gxEsc(o.quote.price_per_unit) + ' ליח׳ · סה"כ ₪' + gxEsc(o.quote.total) +
+            (o.quote.note ? ' · ' + gxEsc(o.quote.note) : '')
+          : 'עוד לא התקבלה הצעה';
+        const actions = o.status === 'quoted'
+          ? '<div class="net-row"><button class="btn btnp" onclick="gxAnswerOrder(\'' + gxEsc(o.id) + '\',\'accepted\')">אשר</button>' +
+            '<button class="btn" onclick="gxAnswerOrder(\'' + gxEsc(o.id) + '\',\'declined\')">דחה</button></div>' : '';
+        const sup = (d.suppliers.find(x => x.supplier_id === o.supplier_id) || {}).name || o.supplier_id;
+        return '<div class="net-card"><div class="net-row" style="align-items:flex-start">' +
+          '<div style="flex:1"><div class="net-title">' + gxEsc(sup) + ' · ' + gxEsc((o.created || '').slice(0,10)) + '</div>' +
+          '<div class="net-sub">' + o.items.map(it => gxEsc(it.name) + ' ' + gxEsc(it.quantity) + " יח'").join(' · ') + '</div>' +
+          '<div class="net-sub" style="margin-top:4px">' + q + '</div></div>' +
+          '<span class="tag ' + (o.status === 'accepted' ? 'g' : (o.status === 'quoted' ? 'b' : 'a')) + '">' +
+            gxEsc(statusTxt[o.status] || o.status) + '</span></div>' + actions + '</div>';
+      }).join('')
+    : '';
+
   const unassigned = d.unassigned.length
     ? '<div class="net-card"><div class="net-title">צריך להזמין, בלי ספק משויך</div>' +
       '<div class="net-sub">' + d.unassigned.map(u => gxEsc(u.name) + " (" + gxEsc(u.quantity) + " יח')").join(' · ') + '</div>' +
@@ -1642,7 +1468,7 @@ async function loadSuppliers() {
     ? '<div class="net-card"><div class="net-sub">' + gxEsc(d.queued.length) + ' הזמנות ממתינות לשליחה אוטומטית.</div></div>' : '';
 
   box.innerHTML = channel +
-    '<div class="sec" style="margin:4px 0 12px">טיוטות הזמנה</div>' + drafts + unassigned + queued +
+    '<div class="sec" style="margin:4px 0 12px">טיוטות הזמנה</div>' + drafts + unassigned + queued + orders +
     '<div class="sec" style="margin:18px 0 12px">הספקים שלי</div>' + list + form;
 }
 
@@ -1690,6 +1516,26 @@ async function gxSupRemove(i, btn) {
   const r = await gxFetch('/suppliers/' + encodeURIComponent(gxStore()) + '/' + encodeURIComponent(sp.supplier_id),
                           { method: 'DELETE' });
   gxToast(r.ok ? 'הספק הוסר' : (r.data.error || 'לא הוסר'), !r.ok);
+  loadSuppliers();
+}
+
+async function gxSupCode(i) {
+  const sp = (__gxSup.suppliers || [])[i];
+  const out = document.getElementById('sup-code-' + i);
+  if (!sp || !out) return;
+  const r = await gxFetch('/suppliers/' + encodeURIComponent(gxStore()) + '/' +
+                          encodeURIComponent(sp.supplier_id) + '/portal-code', { method: 'POST' });
+  if (!r.ok) { out.textContent = r.data.error || 'לא הצלחנו להנפיק קוד'; return; }
+  out.innerHTML = 'למסור לספק — מזהה וקוד (קוד קודם מתבטל):<br>' +
+    '<span style="font-family:monospace;direction:ltr;display:inline-block;user-select:all">' +
+    gxEsc(r.data.supplier_id) + ' : ' + gxEsc(r.data.supplier_token) + '</span><br>' +
+    'הספק נכנס בלשונית "ספק" למעלה.';
+}
+
+async function gxAnswerOrder(orderId, status) {
+  const r = await gxFetch('/orders/' + encodeURIComponent(gxStore()) + '/' + encodeURIComponent(orderId), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+  gxToast(r.ok ? (status === 'accepted' ? 'ההזמנה אושרה' : 'ההצעה נדחתה') : (r.data.error || 'לא נשמר'), !r.ok);
   loadSuppliers();
 }
 
@@ -2436,6 +2282,7 @@ function show(id) {
   if (id === 'suppliers') loadSuppliers();
   if (id === 'settings') loadSettings();
   if (id === 'ads') loadPromotions();
+  if (id === 'sup-dashboard') loadSupplierPortal();
   if (id === 'dashboard' || id === 'stores' || id === 'alerts-admin') loadAdmin(id);
   if (id === 'onboard') obReset();
   setTimeout(() => gxWrapTables(document.getElementById('sc-' + id)), 60);
@@ -2449,17 +2296,95 @@ function switchRole(role) {
     const nav = document.getElementById('nav-'+r);
     if (nav) nav.style.display = r === role ? '' : 'none';
   });
-  const logos = { store: gxStoreName() || 'Genius', admin: 'פאנל מנהל', supplier: 'ספק (הדגמה)' };
+  const logos = { store: gxStoreName() || 'Genius', admin: 'פאנל מנהל', supplier: 'פורטל ספק' };
   const sp = document.getElementById('store-picker'); if (sp) sp.style.display = role === 'store' && __gxStores.length ? '' : 'none';
   document.getElementById('logo-role').textContent = logos[role] || '';
   const first = { store:'overview', admin:'dashboard', supplier:'sup-dashboard' };
   show(first[role]);
 }
 
-function submitSupQuote(cardId, inputId, product) {
-  const val = document.getElementById(inputId).value;
-  if (!val) { gxToast('נא להזין מחיר', true); return; }
-  gxToast('מסך הדגמה — ההצעה לא נשלחה לאף אחד');
+// ═══ Supplier portal: orders addressed to this supplier ═══
+function gxSupCreds() {
+  try { return JSON.parse(localStorage.getItem('gx_supplier') || 'null'); } catch (e) { return null; }
+}
+function gxSetSupCreds(v) {
+  try { v ? localStorage.setItem('gx_supplier', JSON.stringify(v)) : localStorage.removeItem('gx_supplier'); } catch (e) {}
+}
+
+async function loadSupplierPortal() {
+  const box = document.getElementById('sup-portal');
+  if (!box) return;
+  const cr = gxSupCreds();
+  if (!cr) { box.innerHTML = gxSupLogin(); return; }
+  box.innerHTML = '<div class="net-card"><div class="net-sub">טוען הזמנות…</div></div>';
+  let r;
+  try {
+    r = await gxFetch('/supplier/' + encodeURIComponent(cr.id) + '/orders',
+                      { headers: { 'X-Supplier-Token': cr.token } });
+  } catch (e) { box.innerHTML = gxMsgCard('אין חיבור לשרת', '', 'loadSupplierPortal'); return; }
+  if (r.status === 403) { box.innerHTML = gxSupLogin('הקוד לא מתאים או שבוטל. בקש קוד חדש מהחנות.'); return; }
+  if (!r.ok) { box.innerHTML = gxMsgCard('שגיאה', r.data.error || ''); return; }
+  window.__gxSupOrders = r.data.orders || [];
+  const statusTag = { open: ['a', 'ממתין להצעה'], quoted: ['b', 'נשלחה הצעה'],
+                      accepted: ['g', 'אושר'], declined: ['r', 'נדחה'] };
+  const cards = window.__gxSupOrders.length ? window.__gxSupOrders.map((o, i) => {
+    const tag = statusTag[o.status] || ['b', o.status];
+    const items = o.items.map(it => gxEsc(it.name) + ' — ' + gxEsc(it.quantity) + " יח'").join('<br>');
+    const quote = o.quote
+      ? '<div class="net-sub" style="margin-top:6px">ההצעה שלך: ₪' + gxEsc(o.quote.price_per_unit) +
+        ' ליחידה · סה"כ ₪' + gxEsc(o.quote.total) + (o.quote.note ? ' · ' + gxEsc(o.quote.note) : '') + '</div>'
+      : '';
+    const form = (o.status === 'open' || o.status === 'quoted')
+      ? '<div class="net-row" style="margin-top:10px;gap:8px;align-items:center">' +
+          '<input class="fi" id="q-price-' + i + '" type="number" step="0.1" style="max-width:130px" placeholder="מחיר ליח׳">' +
+          '<input class="fi" id="q-note-' + i + '" style="flex:1;min-width:140px" placeholder="הערה (למשל: אספקה מחר)">' +
+          '<button class="btn btnp" onclick="gxSendQuote(' + i + ')">שלח הצעה</button></div>'
+      : '';
+    return '<div class="net-card"><div class="net-row" style="align-items:flex-start">' +
+        '<div style="flex:1"><div class="net-title">' + gxEsc(o.store_name || o.store_id) + '</div>' +
+        '<div class="net-sub">' + items + '</div>' + quote + '</div>' +
+        '<span class="tag ' + tag[0] + '">' + gxEsc(tag[1]) + '</span></div>' + form +
+        '<div class="net-sub" style="margin-top:6px;font-size:11px">' + gxEsc((o.created || '').slice(0, 10)) + '</div>' +
+      '</div>';
+  }).join('') : '<div class="net-card"><div class="net-sub">אין כרגע הזמנות. כשחנות תשלח לך הזמנה היא תופיע כאן.</div></div>';
+  box.innerHTML = '<div class="net-row" style="margin-bottom:12px"><div class="sec" style="margin:0">' +
+      gxEsc(r.data.supplier_name || 'ספק') + '</div>' +
+      '<button class="btn" onclick="gxSetSupCreds(null); loadSupplierPortal();">התנתק</button></div>' +
+    cards + '<div id="sup-status" role="status" style="font-size:12px;color:var(--text2);margin-top:10px"></div>';
+}
+
+function gxSupLogin(msg) {
+  return '<div class="net-card"><div class="net-title">כניסת ספק</div>' +
+    '<div class="net-sub">' + gxEsc(msg || 'החנות שעובדת איתך נותנת לך מזהה וקוד. הכנס אותם כאן כדי לראות את ההזמנות שלה.') + '</div>' +
+    '<div class="fg" style="margin-top:8px"><label class="fl" for="sup-id">מזהה ספק</label>' +
+      '<input class="fi" id="sup-id" dir="ltr" placeholder="sup_0500000000"></div>' +
+    '<div class="fg" style="margin-top:8px"><label class="fl" for="sup-token">קוד</label>' +
+      '<input class="fi" id="sup-token" dir="ltr" type="password"></div>' +
+    '<div class="net-row" style="margin-top:10px"><button class="btn btnp" onclick="gxSupIn()">כניסה</button></div></div>';
+}
+
+function gxSupIn() {
+  const id = (document.getElementById('sup-id').value || '').trim();
+  const token = (document.getElementById('sup-token').value || '').trim();
+  if (!id || !token) { gxToast('צריך מזהה וקוד', true); return; }
+  gxSetSupCreds({ id, token });
+  loadSupplierPortal();
+}
+
+async function gxSendQuote(i) {
+  const o = (window.__gxSupOrders || [])[i];
+  const cr = gxSupCreds();
+  if (!o || !cr) return;
+  const price = (document.getElementById('q-price-' + i) || {}).value;
+  const note = (document.getElementById('q-note-' + i) || {}).value || '';
+  const st = document.getElementById('sup-status');
+  if (!price) { st.textContent = 'צריך מחיר ליחידה'; return; }
+  const r = await gxFetch('/supplier/' + encodeURIComponent(cr.id) + '/orders/' + encodeURIComponent(o.id) + '/quote', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Supplier-Token': cr.token },
+    body: JSON.stringify({ price_per_unit: price, note }) });
+  if (!r.ok) { st.textContent = r.data.error || 'ההצעה לא נשלחה'; return; }
+  gxToast('ההצעה נשלחה לחנות');
+  loadSupplierPortal();
 }
 
 // ── Onboarding (real: calls /onboard) ──
@@ -2585,8 +2510,7 @@ async function sendChat(role) {
 }
 
 // ── Mockup screens are labelled so nobody mistakes them for live data ──
-const GX_MOCKUPS = ['admin-chat',
-  'sup-dashboard', 'sup-orders', 'sup-quotes', 'sup-history', 'sup-catalog', 'sup-delivery', 'sup-settings'];
+const GX_MOCKUPS = ['admin-chat'];
 function gxLabelMockups() {
   GX_MOCKUPS.forEach(id => {
     const el = document.getElementById('sc-' + id);

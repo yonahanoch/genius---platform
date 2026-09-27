@@ -177,6 +177,17 @@ def test_upload_size_limit():
     assert r.status_code == 413
 
 
+def test_cors_allows_every_header_the_site_actually_sends():
+    """A header the browser isn't told about is blocked before the request."""
+    r = C.open("/supplier/sup_1/orders", method="OPTIONS", headers={
+        "Origin": "https://yonahanoch.github.io",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "X-Supplier-Token, X-Store-Token, X-Admin-Token, Content-Type"})
+    allowed = (r.headers.get("Access-Control-Allow-Headers") or "").lower()
+    for h in ("x-store-token", "x-admin-token", "x-supplier-token", "content-type"):
+        assert h in allowed, (h, allowed)
+
+
 def test_cors_only_allows_known_origins():
     r = C.get("/stores", headers={"Origin": "https://evil.example"})
     assert r.headers.get("Access-Control-Allow-Origin") is None
@@ -1051,6 +1062,54 @@ def test_promotions_need_access():
     sid = new_id()
     upload(sid, daily_csv())
     assert C.get("/promotions/" + sid).status_code == 403
+
+
+# ---------------- supplier portal ----------------
+
+def test_supplier_sees_only_its_own_orders_and_can_quote():
+    sid, h = _store_with_reorder()
+    sup = C.post("/suppliers/" + sid, json={"name": "תנובה", "phone": "052-1234567",
+                                            "products": ["חלב"]}, headers=h).json["supplier_id"]
+    C.post("/orders/%s/send" % sid, json={"supplier_id": sup}, headers=h)
+    assert C.get("/supplier/%s/orders" % sup).status_code == 403          # no code, no data
+    code = C.post("/suppliers/%s/%s/portal-code" % (sid, sup), headers=h).json["supplier_token"]
+    sh = {"X-Supplier-Token": code}
+    # a supplier serving several stores sees each store's own orders
+    all_orders = C.get("/supplier/%s/orders" % sup, headers=sh).json["orders"]
+    mine = [o for o in all_orders if o["store_id"] == sid]
+    assert len(mine) == 1 and mine[0]["status"] == "open" and mine[0]["items"][0]["name"] == "חלב"
+    assert all(o["supplier_id"] == sup for o in all_orders)
+    orders = mine
+    oid = orders[0]["id"]
+    assert C.post("/supplier/%s/orders/%s/quote" % (sup, oid), json={"price_per_unit": 0}, headers=sh).status_code == 400
+    q = C.post("/supplier/%s/orders/%s/quote" % (sup, oid),
+               json={"price_per_unit": "4.5", "note": "אספקה מחר"}, headers=sh).json["quote"]
+    assert q["price_per_unit"] == 4.5 and q["total"] == round(4.5 * orders[0]["items"][0]["quantity"], 2)
+
+    # a second supplier with its own code sees nothing of the first one's order
+    sup2 = C.post("/suppliers/" + sid, json={"name": "אסם", "phone": "052-7654321",
+                                             "products": ["לחם"]}, headers=h).json["supplier_id"]
+    code2 = C.post("/suppliers/%s/%s/portal-code" % (sid, sup2), headers=h).json["supplier_token"]
+    assert [o for o in C.get("/supplier/%s/orders" % sup2,
+                             headers={"X-Supplier-Token": code2}).json["orders"]
+            if o["store_id"] == sid] == []
+    assert C.get("/supplier/%s/orders" % sup, headers={"X-Supplier-Token": code2}).status_code == 403
+
+    # the store sees the quote and answers it
+    st = C.get("/suppliers/" + sid, headers=h).json
+    assert st["orders"][0]["quote"]["price_per_unit"] == 4.5
+    assert C.post("/orders/%s/%s" % (sid, oid), json={"status": "accepted"}, headers=h).json["status"] == "accepted"
+    assert C.post("/supplier/%s/orders/%s/quote" % (sup, oid),
+                  json={"price_per_unit": 4}, headers=sh).status_code == 409   # closed
+
+
+def test_portal_code_only_from_the_store_that_owns_the_supplier():
+    sid, h = _store_with_reorder()
+    sup = C.post("/suppliers/" + sid, json={"name": "תנובה", "phone": "052-1234567",
+                                            "products": ["חלב"]}, headers=h).json["supplier_id"]
+    other, oh = _store_with_reorder()
+    assert C.post("/suppliers/%s/%s/portal-code" % (other, sup), headers=oh).status_code == 404
+    assert C.post("/suppliers/%s/%s/portal-code" % (sid, sup)).status_code == 403
 
 
 def test_nightly_runs_once_per_day():

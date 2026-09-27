@@ -47,7 +47,7 @@ CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "https://yonahanoch.github.io,http://localhost:8000,http://127.0.0.1:8000",
 ).split(",") if o.strip()]
 CORS(app, origins=CORS_ORIGINS,
-     allow_headers=["Content-Type", "X-Store-Token", "X-Admin-Token"])
+     allow_headers=["Content-Type", "X-Store-Token", "X-Admin-Token", "X-Supplier-Token"])
 
 ANTHROPIC_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 TWILIO_SID     = os.environ.get("TWILIO_ACCOUNT_SID", "")
@@ -3826,8 +3826,10 @@ def suppliers_list(store_id):
         return err
     drafts, unassigned = order_drafts(db, store_id)
     ready, reason = report_channel_state(store)
+    orders = [o for o in (db.get("orders") or []) if o.get("store_id") == store_id]
+    orders.sort(key=lambda o: o.get("created", ""), reverse=True)
     return jsonify({"store_id": store_id, "suppliers": store_suppliers(db, store_id),
-                    "drafts": drafts, "unassigned": unassigned,
+                    "drafts": drafts, "unassigned": unassigned, "orders": orders[:20],
                     "can_send": ready, "reason": reason,
                     "queued": store.get("order_queue") or [],
                     "products": sorted(parse_sales_csv(store.get("sales_csv") or "").keys())})
@@ -3904,9 +3906,11 @@ def send_order(store_id):
                             "reason": "חנות דמו — ההזמנה מוצגת בלבד"})
         if not can_write(store):
             return deny()
+        record_order(db, store_id, draft)
         ready, reason = report_channel_state(store)
         if ready:
             phone, text = draft["supplier_phone"], draft["text"]
+            save_db(db)
         else:
             q = (store.get("order_queue") or []) + [{"created": datetime.now().isoformat(),
                                                      "supplier": draft["supplier_name"], "text": draft["text"]}]
@@ -4071,6 +4075,125 @@ def promotions(store_id):
         "disclaimer": "ההצעות מבוססות על המכירות שלך בלבד. אי אפשר לדעת מראש כמה כל מבצע יגדיל מכירות — "
                       "כדאי לנסות אחד בכל פעם ולראות בגרפים מה קרה.",
     })
+
+# ===========================================
+# פורטל ספקים — הזמנות פתוחות והצעות מחיר
+# ===========================================
+# When a store sends an order it becomes a record. The store can hand the
+# supplier a code; with it the supplier sees only the orders addressed to
+# them, and can answer with a price. Nothing here is visible without a code.
+# A supplier is one record per phone number, so a supplier serving several
+# stores has ONE code and sees each of their orders. Re-issuing the code from
+# any of those stores replaces it for all of them.
+
+ORDER_STATES = ("open", "quoted", "accepted", "declined")
+
+
+def _supplier_access(db, supplier_id):
+    sup = (db.get("suppliers") or {}).get(supplier_id)
+    if not sup:
+        return None
+    if is_admin():
+        return sup
+    want = sup.get("token_hash")
+    tok = request.headers.get("X-Supplier-Token", "")
+    return sup if (want and tok and hmac.compare_digest(_hash_token(tok), want)) else None
+
+
+def record_order(db, store_id, draft):
+    order = {
+        "id": "ord_" + secrets.token_hex(6),
+        "store_id": store_id,
+        "store_name": (db["stores"].get(store_id) or {}).get("name"),
+        "supplier_id": draft["supplier_id"],
+        "items": draft["items"],
+        "created": datetime.now().isoformat(),
+        "status": "open",
+        "quote": None,
+    }
+    orders = db.setdefault("orders", [])
+    orders.append(order)
+    del orders[:-200]                      # keep the last 200 network-wide
+    return order
+
+
+@app.route("/suppliers/<store_id>/<supplier_id>/portal-code", methods=["POST"])
+def supplier_portal_code(store_id, supplier_id):
+    """The store issues (or re-issues) the code its supplier uses to log in."""
+    with db_lock():
+        db = load_db()
+        store = db["stores"].get(store_id)
+        if not store or not can_write(store):
+            return deny()
+        sup = (db.get("suppliers") or {}).get(supplier_id)
+        if not sup or store_id not in (sup.get("store_ids") or []):
+            return jsonify({"error": "supplier not found"}), 404
+        token = secrets.token_urlsafe(18)
+        sup["token_hash"] = _hash_token(token)
+        save_db(db)
+    return jsonify({"supplier_id": supplier_id, "supplier_token": token})
+
+
+@app.route("/supplier/<supplier_id>/orders", methods=["GET"])
+def supplier_orders(supplier_id):
+    db = load_db()
+    sup = _supplier_access(db, supplier_id)
+    if not sup:
+        return deny("קוד הספק לא תקין", 403)
+    orders = [o for o in (db.get("orders") or []) if o.get("supplier_id") == supplier_id]
+    orders.sort(key=lambda o: o.get("created", ""), reverse=True)
+    return jsonify({"supplier_id": supplier_id, "supplier_name": sup.get("name"),
+                    "orders": orders[:50]})
+
+
+@app.route("/supplier/<supplier_id>/orders/<order_id>/quote", methods=["POST"])
+def supplier_quote(supplier_id, order_id):
+    """The supplier answers with a price per unit and an optional note."""
+    data = request.get_json(silent=True) or {}
+    price = _num_or_none(data.get("price_per_unit"))
+    note = str(data.get("note") or "")[:300]
+    if price is None or price <= 0:
+        return jsonify({"error": "צריך מחיר ליחידה"}), 400
+    with db_lock():
+        db = load_db()
+        sup = _supplier_access(db, supplier_id)
+        if not sup:
+            return deny("קוד הספק לא תקין", 403)
+        order = next((o for o in (db.get("orders") or [])
+                      if o.get("id") == order_id and o.get("supplier_id") == supplier_id), None)
+        if not order:
+            return jsonify({"error": "order not found"}), 404
+        if order["status"] in ("accepted", "declined"):
+            return jsonify({"error": "ההזמנה כבר נסגרה"}), 409
+        total = sum((i.get("quantity") or 0) for i in order["items"])
+        order["quote"] = {"price_per_unit": price, "note": note,
+                          "total": round(price * total, 2), "units": total,
+                          "at": datetime.now().isoformat()}
+        order["status"] = "quoted"
+        save_db(db)
+    return jsonify({"order_id": order_id, "quote": order["quote"]})
+
+
+@app.route("/orders/<store_id>/<order_id>", methods=["POST"])
+def store_answer_order(store_id, order_id):
+    """The store accepts or declines a quote."""
+    data = request.get_json(silent=True) or {}
+    status = data.get("status")
+    if status not in ("accepted", "declined"):
+        return jsonify({"error": "status must be accepted or declined"}), 400
+    with db_lock():
+        db = load_db()
+        store = db["stores"].get(store_id)
+        if not store or not can_write(store):
+            return deny()
+        order = next((o for o in (db.get("orders") or [])
+                      if o.get("id") == order_id and o.get("store_id") == store_id), None)
+        if not order:
+            return jsonify({"error": "order not found"}), 404
+        order["status"] = status
+        order["answered_at"] = datetime.now().isoformat()
+        save_db(db)
+    return jsonify({"order_id": order_id, "status": status})
 
 # ===========================================
 # Bakery demo — day-of-week demand is the whole story
