@@ -1885,9 +1885,14 @@ async function loadOverview() {
   if (!d.stock_known) banners.push('<div class="net-card" style="border-color:var(--amber)"><div class="net-sub">' +
     'אין נתוני מלאי — לכן אין התראות מחסור והמלצות הזמנה. קובץ אחיד מהקופה כולל מלאי.</div></div>');
 
-  const units = d.metric === 'units';
-  const salesVal = units ? gxNum(d.weekly_units) + " יח'" : gxMoney(d.weekly_revenue);
-  const salesSub = (units ? 'אין מחירים — מוצג ביחידות' : 'ממוצע ' + d.window_days + ' הימים האחרונים בנתונים');
+  // an older server (before an update lands) can answer without these fields —
+  // show what we do know instead of printing "undefined"
+  const units = d.metric ? d.metric === 'units' : (d.weekly_revenue == null);
+  const salesVal = units ? gxNum(d.weekly_units != null ? d.weekly_units : d.weekly_sales) + " יח'"
+                         : gxMoney(d.weekly_revenue != null ? d.weekly_revenue : d.weekly_sales);
+  const salesSub = units ? 'אין מחירים — מוצג ביחידות'
+                         : (d.window_days ? 'ממוצע ' + gxEsc(d.window_days) + ' הימים האחרונים בנתונים'
+                                          : 'לפי הנתונים האחרונים');
   const stuck = (d.stuck_value != null && !units)
     ? '<div class="mc"><div class="ml">כסף תקוע במלאי</div><div class="mv">' + gxMoney(d.stuck_value) +
       '</div><div class="ms">מלאי × מחיר של מוצרים שלא זזים 30+ יום</div></div>'
