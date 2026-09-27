@@ -926,6 +926,58 @@ def test_weekly_report_needs_access():
     assert C.get("/report/" + sid).status_code == 403
 
 
+# ---------------- suppliers and order drafts ----------------
+
+def _store_with_reorder():
+    from datetime import datetime, timedelta
+    rows = ["תאריך,מוצר,כמות"]
+    d = datetime(2026, 8, 1)
+    while d <= datetime(2026, 9, 25):
+        rows += ["%s,חלב,20" % d.strftime("%Y-%m-%d"), "%s,לחם,30" % d.strftime("%Y-%m-%d")]
+        d += timedelta(days=1)
+    sid = new_id()
+    tok = upload(sid, "\n".join(rows)).json["store_token"]
+    with main.db_lock():
+        db = main.load_db()
+        db["stores"][sid]["stock"] = {"חלב": 30, "לחם": 40}
+        main._save_rule_analysis(db, sid)
+        main.save_db(db)
+    return sid, {"X-Store-Token": tok}
+
+
+def test_supplier_crud_and_order_draft():
+    sid, h = _store_with_reorder()
+    assert C.post("/suppliers/" + sid, json={"name": "תנובה", "phone": "052-1234567",
+                                             "products": ["חלב"]}).status_code == 403   # needs the key
+    r = C.post("/suppliers/" + sid, json={"name": "תנובה", "phone": "052-1234567",
+                                          "products": ["חלב"]}, headers=h)
+    assert r.status_code == 200 and r.json["suppliers"][0]["products"] == ["חלב"]
+    d = C.get("/suppliers/" + sid, headers=h).json
+    draft = d["drafts"][0]
+    assert draft["supplier_name"] == "תנובה" and "חלב" in draft["text"] and "יחידות" in draft["text"]
+    assert [u["name"] for u in d["unassigned"]] == ["לחם"]          # nobody assigned to bread yet
+    assert C.post("/suppliers/" + sid, json={"name": "x", "phone": "123"}, headers=h).status_code == 400
+
+
+def test_order_is_queued_until_whatsapp_and_supplier_can_be_removed():
+    sid, h = _store_with_reorder()
+    sup = C.post("/suppliers/" + sid, json={"name": "תנובה", "phone": "052-1234567",
+                                            "products": ["חלב"]}, headers=h).json["supplier_id"]
+    r = C.post("/orders/%s/send" % sid, json={"supplier_id": sup}, headers=h).json
+    assert r["queued"] is True and r["sent"] is False
+    assert len(main.load_db()["stores"][sid]["order_queue"]) == 1
+    assert C.delete("/suppliers/%s/%s" % (sid, sup), headers=h).json["removed"] == sup
+    after = C.get("/suppliers/" + sid, headers=h).json
+    assert after["suppliers"] == [] and after["drafts"] == []
+    assert sup not in main.load_db()["suppliers"]                   # no other store used it
+
+
+def test_demo_store_orders_are_preview_only():
+    d = C.get("/suppliers/demo_pharm").json
+    assert C.post("/suppliers/demo_pharm", json={"name": "x", "phone": "0521234567"}).status_code == 403
+    assert d["drafts"] == [] and d["unassigned"], d                  # nothing assigned in the demo
+
+
 def test_nightly_runs_once_per_day():
     main.nightly_job()
     first = main.load_db()["meta"]["nightly_last"]

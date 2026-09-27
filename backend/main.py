@@ -3747,6 +3747,169 @@ def clear_report_queue(store_id):
     return jsonify({"cleared": True})
 
 # ===========================================
+# ספקים והזמנות — טיוטת הזמנה מוכנה לשליחה
+# ===========================================
+# The store owner keeps its own supplier list and decides which product comes
+# from whom. From the reorder list we build one order draft per supplier —
+# ready to send on WhatsApp, or to copy and send by hand until it's connected.
+
+ORDER_QUEUE_MAX = 20
+
+
+def store_suppliers(db, store_id):
+    """Suppliers linked to this store, with the products assigned to each."""
+    smap = (db["stores"].get(store_id) or {}).get("supplier_map") or {}
+    out = []
+    for sup_id, sup in (db.get("suppliers") or {}).items():
+        if store_id not in (sup.get("store_ids") or []):
+            continue
+        out.append({
+            "supplier_id": sup_id,
+            "name": sup.get("name"),
+            "phone": sup.get("phone"),
+            "note": sup.get("products") or "",
+            "products": sorted([p for p, sid in smap.items() if sid == sup_id]),
+        })
+    out.sort(key=lambda s: s["name"] or "")
+    return out
+
+
+def order_drafts(db, store_id):
+    """One draft per supplier from the products the rules say to reorder."""
+    store = db["stores"].get(store_id) or {}
+    analysis, _ = latest_analysis(db, store_id)
+    hot = [p for p in (analysis.get("hot_products") or []) if (p.get("order_quantity") or 0) > 0]
+    smap = store.get("supplier_map") or {}
+    by_key = {_norm_name(k): v for k, v in smap.items()}
+    sups = {s["supplier_id"]: s for s in store_suppliers(db, store_id)}
+
+    drafts, unassigned = {}, []
+    for p in hot:
+        sup_id = smap.get(p.get("name")) or by_key.get(_norm_name(p.get("name")))
+        if not sup_id or sup_id not in sups:
+            unassigned.append({"name": p.get("name"), "quantity": p.get("order_quantity"),
+                               "days_until_empty": p.get("days_until_empty")})
+            continue
+        drafts.setdefault(sup_id, []).append({"name": p.get("name"), "quantity": p.get("order_quantity"),
+                                              "days_until_empty": p.get("days_until_empty")})
+    out = []
+    for sup_id, items in drafts.items():
+        sup = sups[sup_id]
+        lines = ["שלום %s," % sup["name"], "", "הזמנה מ%s:" % (store.get("name") or "החנות")]
+        lines += ["• %s — %s יחידות" % (i["name"], i["quantity"]) for i in items]
+        soonest = min((i["days_until_empty"] for i in items if i["days_until_empty"] is not None), default=None)
+        if soonest is not None and soonest <= 3:
+            when = {0: "היום", 1: "מחר", 2: "תוך יומיים"}.get(soonest, "תוך %d ימים" % soonest)
+            lines.append("")
+            lines.append("חלק מהפריטים נגמרים אצלנו %s." % when)
+        if store.get("phone"):
+            lines += ["", "לאישור או שאלות: %s" % store.get("phone")]
+        out.append({"supplier_id": sup_id, "supplier_name": sup["name"], "supplier_phone": sup["phone"],
+                    "items": items, "text": "\n".join(lines)})
+    out.sort(key=lambda d: d["supplier_name"] or "")
+    return out, unassigned
+
+
+@app.route("/suppliers/<store_id>", methods=["GET"])
+def suppliers_list(store_id):
+    db = load_db()
+    store, err = get_readable_store(db, store_id)
+    if err:
+        return err
+    drafts, unassigned = order_drafts(db, store_id)
+    ready, reason = report_channel_state(store)
+    return jsonify({"store_id": store_id, "suppliers": store_suppliers(db, store_id),
+                    "drafts": drafts, "unassigned": unassigned,
+                    "can_send": ready, "reason": reason,
+                    "queued": store.get("order_queue") or [],
+                    "products": sorted(parse_sales_csv(store.get("sales_csv") or "").keys())})
+
+
+@app.route("/suppliers/<store_id>", methods=["POST"])
+def suppliers_save(store_id):
+    """Add or update a supplier, and which products come from it."""
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "").strip()[:80]
+    phone = str(data.get("phone") or "").strip()
+    if not name or len(normalize_phone(phone)) < 8:
+        return jsonify({"error": "צריך שם ספק וטלפון תקין"}), 400
+    products = [str(p).strip()[:120] for p in (data.get("products") or []) if str(p).strip()][:200]
+    with db_lock():
+        db = load_db()
+        store = db["stores"].get(store_id)
+        if not store or not can_write(store):
+            return deny()
+        sup_id = "sup_" + normalize_phone(phone)
+        sup = db["suppliers"].get(sup_id) or {"store_ids": []}
+        sup.update({"name": name, "phone": phone,
+                    "products": str(data.get("note") or sup.get("products") or "")[:200]})
+        sup["store_ids"] = sorted(set((sup.get("store_ids") or []) + [store_id]))
+        db["suppliers"][sup_id] = sup
+        smap = dict(store.get("supplier_map") or {})
+        for p in list(smap):
+            if smap[p] == sup_id and p not in products:
+                del smap[p]                      # unassigned from this supplier
+        for p in products:
+            smap[p] = sup_id
+        store["supplier_map"] = smap
+        save_db(db)
+        result = store_suppliers(db, store_id)
+    return jsonify({"saved": True, "supplier_id": sup_id, "suppliers": result})
+
+
+@app.route("/suppliers/<store_id>/<supplier_id>", methods=["DELETE"])
+def suppliers_remove(store_id, supplier_id):
+    with db_lock():
+        db = load_db()
+        store = db["stores"].get(store_id)
+        if not store or not can_write(store):
+            return deny()
+        sup = db["suppliers"].get(supplier_id)
+        if not sup:
+            return jsonify({"error": "supplier not found"}), 404
+        sup["store_ids"] = [i for i in (sup.get("store_ids") or []) if i != store_id]
+        if not sup["store_ids"]:
+            db["suppliers"].pop(supplier_id, None)
+        store["supplier_map"] = {p: s for p, s in (store.get("supplier_map") or {}).items()
+                                 if s != supplier_id}
+        save_db(db)
+    return jsonify({"removed": supplier_id})
+
+
+@app.route("/orders/<store_id>/send", methods=["POST"])
+def send_order(store_id):
+    """Sends one supplier's order if WhatsApp is connected, else queues it."""
+    data = request.get_json(silent=True) or {}
+    sup_id = data.get("supplier_id")
+    phone = text = None
+    with db_lock():
+        db = load_db()
+        store = db["stores"].get(store_id)
+        if not store or not can_read(store):
+            return deny()
+        drafts, _ = order_drafts(db, store_id)
+        draft = next((d for d in drafts if d["supplier_id"] == sup_id), None)
+        if not draft:
+            return jsonify({"error": "אין טיוטת הזמנה לספק הזה"}), 404
+        if store.get("demo"):
+            return jsonify({"sent": False, "queued": False, "demo": True, "text": draft["text"],
+                            "reason": "חנות דמו — ההזמנה מוצגת בלבד"})
+        if not can_write(store):
+            return deny()
+        ready, reason = report_channel_state(store)
+        if ready:
+            phone, text = draft["supplier_phone"], draft["text"]
+        else:
+            q = (store.get("order_queue") or []) + [{"created": datetime.now().isoformat(),
+                                                     "supplier": draft["supplier_name"], "text": draft["text"]}]
+            store["order_queue"] = q[-ORDER_QUEUE_MAX:]
+            save_db(db)
+    if text is None:
+        return jsonify({"sent": False, "queued": True, "reason": reason, "text": draft["text"]})
+    ok = send_whatsapp(phone, text)
+    return jsonify({"sent": bool(ok), "queued": False, "text": draft["text"]})
+
+# ===========================================
 # Bakery demo — day-of-week demand is the whole story
 # ===========================================
 

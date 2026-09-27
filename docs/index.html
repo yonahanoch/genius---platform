@@ -622,6 +622,7 @@ select.fi { cursor: pointer; }
       <div class="nav-sep">חוץ-חנות</div>
       <div class="ni" onclick="show('network')"><i class="ti ti-arrows-exchange"></i> העברת מלאי</div>
       <div class="ni" onclick="show('bulk')"><i class="ti ti-shopping-cart"></i> קנייה משותפת</div>
+      <div class="ni" onclick="show('suppliers')"><i class="ti ti-truck-delivery"></i> ספקים והזמנות</div>
       <div class="ni" onclick="show('ads')"><i class="ti ti-speakerphone"></i> פרסום חכם</div>
       <div class="ni" onclick="show('lending')"><i class="ti ti-cash"></i> מימון</div>
       <div class="nav-sep">חשבון</div>
@@ -747,6 +748,13 @@ select.fi { cursor: pointer; }
       <div class="sc" id="sc-production">
         <div id="production-body">
           <div class="net-card"><div class="net-sub">מחשב כמה להכין…</div></div>
+        </div>
+      </div>
+
+      <!-- ═══ STORE: Suppliers and orders ═══ -->
+      <div class="sc" id="sc-suppliers">
+        <div id="suppliers-body">
+          <div class="net-card"><div class="net-sub">טוען ספקים…</div></div>
         </div>
       </div>
 
@@ -1152,7 +1160,7 @@ select.fi { cursor: pointer; }
 // ── Navigation ──
 const screenTitles = {
   overview: 'סקירה — כהן פארם', products: 'מוצרים ומלאי', trends: 'גרפים וטרנדים',
-  chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת', production: 'כמה להכין', report: 'דוח שבועי',
+  chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת', production: 'כמה להכין', report: 'דוח שבועי', suppliers: 'ספקים והזמנות',
   ads: 'פרסום חכם', connect: 'חיבור נתונים', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
   stores: 'ניהול חנויות', 'alerts-admin': 'התראות', onboard: 'צרף חנות חדשה',
   'admin-chat': 'סוכן AI — מנהל',
@@ -1480,6 +1488,121 @@ async function loadProduction(date) {
       gxEsc(d.date.slice(8,10) + '/' + d.date.slice(5,7)) + '</div>' + table +
     '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + gxEsc(d.based_on_days) +
       ' ימי מכירה רגילים בשמונה השבועות האחרונים שבנתונים. הטווח הוא הפיזור בפועל של אותו יום בשבוע.</div>';
+}
+
+// ═══ Suppliers and ready-to-send orders ═══
+let __gxSup = null;
+
+async function loadSuppliers() {
+  const box = document.getElementById('suppliers-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">טוען ספקים…</div></div>';
+  const d = await gxLoadInto(box, '/suppliers/' + encodeURIComponent(gxStore()), 'loadSuppliers');
+  if (!d) return;
+  __gxSup = d;
+  const prodOptions = (names, chosen) => (names || []).map(n =>
+    '<option value="' + gxEsc(n) + '"' + ((chosen || []).indexOf(n) >= 0 ? ' selected' : '') + '>' + gxEsc(n) + '</option>').join('');
+
+  const list = d.suppliers.length ? d.suppliers.map((sp, i) =>
+    '<div class="net-card"><div class="net-title">' + gxEsc(sp.name) + '</div>' +
+      '<div class="net-sub" dir="ltr" style="text-align:right">' + gxEsc(sp.phone) + '</div>' +
+      '<div class="net-sub" style="margin-top:6px">מוצרים: ' +
+        (sp.products.length ? sp.products.map(gxEsc).join(', ') : '<span style="color:var(--text3)">עוד לא שויכו מוצרים</span>') + '</div>' +
+      '<div class="net-row"><button class="btn" onclick="gxSupEdit(' + i + ')">ערוך</button>' +
+        '<button class="btn" style="color:var(--red);border-color:var(--red-dim)" onclick="gxSupRemove(' + i + ',this)">הסר</button></div></div>'
+  ).join('') : '<div class="net-card"><div class="net-sub">עוד לא הוספת ספקים. אחרי שתוסיף, נכין לך טיוטת הזמנה לכל ספק.</div></div>';
+
+  const form = '<div class="net-card"><div class="net-title" id="sup-form-title">הוספת ספק</div>' +
+    '<input type="hidden" id="sup-editing" value="">' +
+    '<div class="fg" style="margin-top:8px"><label class="fl" for="sup-name">שם הספק</label><input class="fi" id="sup-name" placeholder="למשל: תנובה"></div>' +
+    '<div class="fg" style="margin-top:8px"><label class="fl" for="sup-phone">טלפון (WhatsApp)</label><input class="fi" id="sup-phone" dir="ltr" inputmode="tel" placeholder="050-0000000"></div>' +
+    '<div class="fg" style="margin-top:8px"><label class="fl" for="sup-products">מוצרים שמגיעים ממנו (אפשר לבחור כמה)</label>' +
+      '<select class="fi" id="sup-products" multiple size="6">' + prodOptions(d.products, []) + '</select></div>' +
+    '<div class="net-row" style="margin-top:10px"><button class="btn btnp" onclick="gxSupSave()">שמור ספק</button>' +
+      '<span id="sup-status" role="status" style="font-size:12px;color:var(--text2)"></span></div></div>';
+
+  const drafts = d.drafts.length ? d.drafts.map((dr, i) =>
+    '<div class="net-card"><div class="net-title">הזמנה ל' + gxEsc(dr.supplier_name) + '</div>' +
+      '<pre style="white-space:pre-wrap;font-family:var(--font);font-size:13px;margin:8px 0 0;line-height:1.7">' + gxEsc(dr.text) + '</pre>' +
+      '<div class="net-row" style="margin-top:10px">' +
+        '<button class="btn" onclick="gxCopyText(this.parentNode.parentNode.querySelector(\'pre\'))">העתק</button>' +
+        '<button class="btn btnp" onclick="gxSendOrder(' + i + ')">' + (d.can_send ? 'שלח לספק ב-WhatsApp' : 'שמור לשליחה') + '</button>' +
+      '</div></div>').join('')
+    : '<div class="net-card"><div class="net-sub">אין כרגע מוצרים שצריך להזמין, או שהם עוד לא שויכו לספק.</div></div>';
+
+  const unassigned = d.unassigned.length
+    ? '<div class="net-card"><div class="net-title">צריך להזמין, בלי ספק משויך</div>' +
+      '<div class="net-sub">' + d.unassigned.map(u => gxEsc(u.name) + " (" + gxEsc(u.quantity) + " יח')").join(' · ') + '</div>' +
+      '<div class="net-sub" style="margin-top:6px;font-size:11px">הוסף ספק ובחר את המוצרים האלה כדי לקבל טיוטת הזמנה.</div></div>'
+    : '';
+  const channel = d.can_send ? '' :
+    '<div class="net-card" style="border-color:var(--amber)"><div class="net-sub" style="color:var(--amber)">' +
+      gxEsc(d.reason || '') + '. אפשר להעתיק את ההזמנה ולשלוח בעצמך.</div></div>';
+  const queued = (d.queued || []).length
+    ? '<div class="net-card"><div class="net-sub">' + gxEsc(d.queued.length) + ' הזמנות ממתינות לשליחה אוטומטית.</div></div>' : '';
+
+  box.innerHTML = channel +
+    '<div class="sec" style="margin:4px 0 12px">טיוטות הזמנה</div>' + drafts + unassigned + queued +
+    '<div class="sec" style="margin:18px 0 12px">הספקים שלי</div>' + list + form;
+}
+
+function gxCopyText(el) {
+  const t = (el || {}).textContent || '';
+  try { navigator.clipboard.writeText(t); gxToast('הועתק ✓'); }
+  catch (e) { gxToast('סמן את הטקסט והעתק', true); }
+}
+
+function gxSupEdit(i) {
+  const sp = (__gxSup.suppliers || [])[i];
+  if (!sp) return;
+  document.getElementById('sup-form-title').textContent = 'עריכת ספק';
+  document.getElementById('sup-editing').value = sp.supplier_id;
+  document.getElementById('sup-name').value = sp.name || '';
+  document.getElementById('sup-phone').value = sp.phone || '';
+  const sel = document.getElementById('sup-products');
+  [...sel.options].forEach(o => { o.selected = sp.products.indexOf(o.value) >= 0; });
+  sel.scrollIntoView({ block: 'center' });
+}
+
+async function gxSupSave() {
+  const st = document.getElementById('sup-status');
+  const name = document.getElementById('sup-name').value.trim();
+  const phone = document.getElementById('sup-phone').value.trim();
+  const products = [...document.getElementById('sup-products').selectedOptions].map(o => o.value);
+  if (!name || phone.replace(/\D/g, '').length < 9) { st.textContent = 'צריך שם וטלפון תקין'; return; }
+  st.textContent = 'שומר…';
+  const r = await gxFetch('/suppliers/' + encodeURIComponent(gxStore()), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, phone, products }) });
+  if (!r.ok) { st.textContent = r.data.error || 'לא נשמר'; return; }
+  gxToast('הספק נשמר');
+  loadSuppliers();
+}
+
+async function gxSupRemove(i, btn) {
+  const sp = (__gxSup.suppliers || [])[i];
+  if (!sp) return;
+  if (btn.dataset.armed !== '1') {
+    btn.dataset.armed = '1'; btn.textContent = 'לאישור — לחץ שוב';
+    setTimeout(() => { if (btn.dataset.armed === '1') { btn.dataset.armed = ''; btn.textContent = 'הסר'; } }, 5000);
+    return;
+  }
+  const r = await gxFetch('/suppliers/' + encodeURIComponent(gxStore()) + '/' + encodeURIComponent(sp.supplier_id),
+                          { method: 'DELETE' });
+  gxToast(r.ok ? 'הספק הוסר' : (r.data.error || 'לא הוסר'), !r.ok);
+  loadSuppliers();
+}
+
+async function gxSendOrder(i) {
+  const dr = (__gxSup.drafts || [])[i];
+  if (!dr) return;
+  const r = await gxFetch('/orders/' + encodeURIComponent(gxStore()) + '/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ supplier_id: dr.supplier_id }) });
+  if (!r.ok) { gxToast(r.data.error || 'לא נשלח', true); return; }
+  gxToast(r.data.demo ? 'חנות דמו — שום הודעה לא נשלחה'
+    : (r.data.sent ? 'נשלח לספק ✓' : 'נשמר — יישלח כשה-WhatsApp יחובר'));
+  if (!r.data.demo) loadSuppliers();
 }
 
 // ═══ Admin screens — live data behind the admin token ═══
@@ -2194,6 +2317,7 @@ function show(id) {
   if (id === 'lending') loadLending();
   if (id === 'production') loadProduction();
   if (id === 'report') loadReport();
+  if (id === 'suppliers') loadSuppliers();
   if (id === 'dashboard' || id === 'stores' || id === 'alerts-admin') loadAdmin(id);
   if (id === 'onboard') obReset();
 }
