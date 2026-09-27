@@ -978,6 +978,36 @@ def test_demo_store_orders_are_preview_only():
     assert d["drafts"] == [] and d["unassigned"], d                  # nothing assigned in the demo
 
 
+# ---------------- settings, export, delete ----------------
+
+def test_owner_can_export_everything_and_delete_the_store():
+    sid = new_id()
+    tok = upload(sid, daily_csv(), name="לייצוא").json["store_token"]
+    h = {"X-Store-Token": tok}
+    assert C.get("/store/%s/export" % sid).status_code == 403          # not without the key
+    r = C.get("/store/%s/export" % sid, headers=h)
+    assert r.status_code == 200 and "attachment" in r.headers["Content-Disposition"]
+    data = json.loads(r.get_data(as_text=True))
+    assert data["store"]["name"] == "לייצוא" and data["store"]["sales_csv"]
+    assert "token_hash" not in data["store"]                            # the secret stays out
+    assert C.get("/store/demo_pharm/export").status_code == 403         # demo data isn't exportable
+    assert C.delete("/store/" + sid).status_code == 403
+    assert C.delete("/store/" + sid, headers=h).json["deleted"] == sid
+    assert sid not in main.load_db()["stores"]
+    assert C.delete("/store/demo_pharm", headers=ADMIN).status_code == 403   # demo stays put
+
+
+def test_store_settings_switches_are_saved():
+    sid = new_id()
+    tok = upload(sid, daily_csv()).json["store_token"]
+    h = {"X-Store-Token": tok}
+    r = C.post("/store/%s/settings" % sid, json={"name": "שם חדש", "weekly_report_enabled": False}, headers=h)
+    assert r.json["name"] == "שם חדש" and r.json["weekly_report_enabled"] is False
+    st = C.get("/store/" + sid, headers=h).json
+    assert st["weekly_report_enabled"] is False and st["order_alerts_enabled"] is True
+    assert C.get("/store/" + sid).status_code == 403
+
+
 def test_nightly_runs_once_per_day():
     main.nightly_job()
     first = main.load_db()["meta"]["nightly_last"]

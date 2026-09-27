@@ -1463,9 +1463,14 @@ def store_settings(store_id):
             store["network_opt_in"] = bool(data["network_opt_in"])
         if data.get("name"):
             store["name"] = str(data["name"]).strip()[:80]
+        for flag in ("weekly_report_enabled", "order_alerts_enabled"):
+            if flag in data:
+                store[flag] = bool(data[flag])
         save_db(db)
     return jsonify({"store_id": store_id, "network_opt_in": bool(store.get("network_opt_in")),
-                    "name": store.get("name"), "has_phone": bool(normalize_phone(store.get("phone")))})
+                    "name": store.get("name"), "has_phone": bool(normalize_phone(store.get("phone"))),
+                    "weekly_report_enabled": store.get("weekly_report_enabled", True),
+                    "order_alerts_enabled": store.get("order_alerts_enabled", True)})
 
 
 def nightly_job():
@@ -1507,7 +1512,7 @@ def nightly_job():
                     print(f"  ! analysis failed for {store_id}: {e}")
                 # weekly report every Sunday: sent if WhatsApp is connected,
                 # otherwise kept in the store's queue and shown on the site
-                if datetime.now().weekday() == 6:
+                if datetime.now().weekday() == 6 and store.get("weekly_report_enabled", True):
                     try:
                         rep = compose_weekly_report(db, store_id)
                         if "error" not in rep:
@@ -2453,6 +2458,9 @@ def store_state(store_id):
         "data_source": store.get("data_source"),
         "network_opt_in": bool(store.get("network_opt_in")),
         "has_phone": bool(normalize_phone(store.get("phone"))),
+        "phone": store.get("phone") if has_store_access(store) else None,
+        "weekly_report_enabled": store.get("weekly_report_enabled", True),
+        "order_alerts_enabled": store.get("order_alerts_enabled", True),
     })
 
 # ===========================================
@@ -3908,6 +3916,52 @@ def send_order(store_id):
         return jsonify({"sent": False, "queued": True, "reason": reason, "text": draft["text"]})
     ok = send_whatsapp(phone, text)
     return jsonify({"sent": bool(ok), "queued": False, "text": draft["text"]})
+
+# ===========================================
+# הגדרות החנות — כולל ייצוא ומחיקה של הנתונים
+# ===========================================
+# The owner can take everything out (one JSON file with the sales, stock,
+# prices, suppliers and analyses) and can delete the store for good.
+
+@app.route("/store/<store_id>/export", methods=["GET"])
+def export_store(store_id):
+    """Everything stored about this store, for the owner to keep."""
+    db = load_db()
+    store, err = get_readable_store(db, store_id)
+    if err:
+        return err
+    if not has_store_access(store):
+        return deny()                 # demo data is readable, but not exportable
+    analysis, latest = latest_analysis(db, store_id)
+    payload = {
+        "exported_at": datetime.now().isoformat(),
+        "store": {k: v for k, v in store.items() if k != "token_hash"},
+        "suppliers": store_suppliers(db, store_id),
+        "recommendations": [r for r in db.get("recommendations", []) if r.get("store_id") == store_id],
+    }
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    return app.response_class(
+        body, mimetype="application/json",
+        headers={"Content-Disposition": 'attachment; filename="genius-%s.json"' % store_id})
+
+
+@app.route("/store/<store_id>", methods=["DELETE"])
+def delete_own_store(store_id):
+    """The owner deletes their store. Requires the store's own access code."""
+    with db_lock():
+        db = load_db()
+        store = db["stores"].get(store_id)
+        if not store or store.get("demo") or not has_store_access(store):
+            return deny()
+        del db["stores"][store_id]
+        db["recommendations"] = [r for r in db.get("recommendations", []) if r.get("store_id") != store_id]
+        for sup in list(db.get("suppliers", {}).values()):
+            sup["store_ids"] = [i for i in (sup.get("store_ids") or []) if i != store_id]
+        db["suppliers"] = {k: v for k, v in db.get("suppliers", {}).items() if v.get("store_ids")}
+        db["contact_consents"] = [c for c in db.get("contact_consents", [])
+                                  if store_id not in (c.get("a"), c.get("b"))]
+        save_db(db)
+    return jsonify({"deleted": store_id})
 
 # ===========================================
 # Bakery demo — day-of-week demand is the whole story

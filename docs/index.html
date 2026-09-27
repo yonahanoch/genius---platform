@@ -840,35 +840,9 @@ select.fi { cursor: pointer; }
         </button>
       </div>
 
-      <!-- ═══ STORE: Settings ═══ -->
+      <!-- ═══ STORE: Settings (live) ═══ -->
       <div class="sc" id="sc-settings">
-        <div style="max-width:480px">
-          <div class="sec" style="margin-bottom:12px">הגדרות חשבון</div>
-          <div class="setting-row">
-            <div><div class="setting-label">התראות WhatsApp</div><div class="setting-sub">קבל עדכונים ישירות ל-WhatsApp</div></div>
-            <button class="toggle" onclick="this.classList.toggle('off')"></button>
-          </div>
-          <div class="setting-row">
-            <div><div class="setting-label">תדירות: יומית ב-9:00</div><div class="setting-sub">עדכון כל יום בבוקר</div></div>
-            <button class="toggle off" onclick="this.classList.toggle('off')"></button>
-          </div>
-          <div class="setting-row">
-            <div><div class="setting-label">המלצות אוטומטיות</div><div class="setting-sub">הסוכן שולח המלצות ללא אישור מוקדם</div></div>
-            <button class="toggle" onclick="this.classList.toggle('off')"></button>
-          </div>
-          <div class="setting-row">
-            <div><div class="setting-label">שיתוף נתוני רשת</div><div class="setting-sub">אפשר לסוכן לנתח מגמות ברשת לטובתך</div></div>
-            <button class="toggle" onclick="this.classList.toggle('off')"></button>
-          </div>
-          <div class="setting-row">
-            <div><div class="setting-label">התראות פרסום</div><div class="setting-sub">עדכון על ביצועי קמפיינים</div></div>
-            <button class="toggle off" onclick="this.classList.toggle('off')"></button>
-          </div>
-          <div style="margin-top:20px;display:flex;gap:8px">
-            <button class="btn">שנה סיסמה</button>
-            <button class="btn btnp">שמור הגדרות</button>
-          </div>
-        </div>
+        <div id="settings-body"><div class="net-card"><div class="net-sub">טוען הגדרות…</div></div></div>
       </div>
 
       <!-- ═══ ADMIN: Dashboard (live) ═══ -->
@@ -1488,6 +1462,111 @@ async function loadProduction(date) {
       gxEsc(d.date.slice(8,10) + '/' + d.date.slice(5,7)) + '</div>' + table +
     '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + gxEsc(d.based_on_days) +
       ' ימי מכירה רגילים בשמונה השבועות האחרונים שבנתונים. הטווח הוא הפיזור בפועל של אותו יום בשבוע.</div>';
+}
+
+// ═══ Settings: name, notifications, network, export, delete ═══
+async function loadSettings() {
+  const box = document.getElementById('settings-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">טוען הגדרות…</div></div>';
+  let d;
+  try { d = await gxLoadStore(true); } catch (e) { gxErr(box, 'loadSettings', e.r); return; }
+  const mine = gxIsMine(gxStore());
+  if (!mine) {
+    box.innerHTML = gxDemoNote({ demo: true }) +
+      gxMsgCard('הגדרות זמינות לחנות שלך', 'בחר חנות שחיברת, או העלה נתונים במסך "חיבור נתונים".');
+    return;
+  }
+  const code = gxTokenFor(gxStore());
+  const sw = (id, label, sub, on) =>
+    '<div class="setting-row"><div><div class="setting-label">' + label + '</div>' +
+    '<div class="setting-sub">' + sub + '</div></div>' +
+    '<button class="toggle' + (on ? '' : ' off') + '" id="' + id + '" onclick="gxToggleSetting(\'' + id + '\')" aria-label="' + label + '"></button></div>';
+
+  box.innerHTML =
+    '<div style="max-width:560px">' +
+      '<div class="sec" style="margin-bottom:12px">פרטי החנות</div>' +
+      '<div class="fg"><label class="fl" for="set-name">שם החנות</label>' +
+        '<input class="fi" id="set-name" value="' + gxEsc(d.store_name || '') + '"></div>' +
+      '<div class="net-row" style="margin:10px 0 18px"><button class="btn btnp" onclick="gxSaveName()">שמור שם</button>' +
+        '<span id="set-status" role="status" style="font-size:12px;color:var(--text2)"></span></div>' +
+      '<div class="setting-row"><div><div class="setting-label">טלפון לעדכוני WhatsApp</div>' +
+        '<div class="setting-sub">' + (d.has_phone ? gxEsc(d.phone || 'רשום') : 'לא רשום — נדרש לדוחות, להזמנות ולרשת') + '</div></div>' +
+        (d.has_phone ? '<span class="pill g"><span class="dot"></span>רשום</span>'
+                     : '<button class="btn" onclick="show(\'onboard\')">הוסף טלפון</button>') + '</div>' +
+      sw('set-weekly', 'דוח שבועי', 'נשלח בכל יום ראשון כשה-WhatsApp מחובר', d.weekly_report_enabled !== false) +
+      sw('set-orders', 'התראות הזמנה', 'כשמוצר עומד להיגמר', d.order_alerts_enabled !== false) +
+      sw('set-network', 'השתתפות ברשת', 'התאמות העברת מלאי וקנייה משותפת עם חנויות אחרות', !!d.network_opt_in) +
+      '<div class="sec" style="margin:20px 0 12px">הנתונים שלך</div>' +
+      '<div class="net-card"><div class="net-title">קוד הגישה לחנות</div>' +
+        '<div class="net-sub">נדרש כדי לפתוח את החנות במכשיר אחר. שמור אותו במקום בטוח.</div>' +
+        '<div style="margin-top:8px;font-family:monospace;font-size:12px;direction:ltr;text-align:left;user-select:all">' +
+          gxEsc(gxStore()) + (code ? ' : ' + gxEsc(code) : '') + '</div></div>' +
+      '<div class="net-card"><div class="net-title">ייצוא הנתונים</div>' +
+        '<div class="net-sub">קובץ אחד עם המכירות, המלאי, המחירים, הספקים והניתוחים.</div>' +
+        '<div class="net-row"><button class="btn" onclick="gxExportData()">הורד קובץ</button></div></div>' +
+      '<div class="net-card" style="border-color:var(--red-dim)"><div class="net-title">מחיקת החנות</div>' +
+        '<div class="net-sub">מוחק לצמיתות את כל הנתונים של החנות מהשרת. אי אפשר לשחזר.</div>' +
+        '<div class="net-row"><button class="btn" style="color:var(--red);border-color:var(--red-dim)" onclick="gxDeleteStore(this)">מחק את החנות</button></div></div>' +
+    '</div>';
+}
+
+async function gxToggleSetting(id) {
+  const el = document.getElementById(id);
+  const on = el.classList.contains('off');          // about to turn on
+  const key = { 'set-weekly': 'weekly_report_enabled', 'set-orders': 'order_alerts_enabled',
+                'set-network': 'network_opt_in' }[id];
+  const r = await gxFetch('/store/' + encodeURIComponent(gxStore()) + '/settings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [key]: on }) });
+  if (!r.ok) { gxToast(r.data.error || 'לא נשמר', true); return; }
+  el.classList.toggle('off', !on);
+  __gxStoreCache = null;
+  gxToast('נשמר');
+}
+
+async function gxSaveName() {
+  const name = document.getElementById('set-name').value.trim();
+  const st = document.getElementById('set-status');
+  if (!name) { st.textContent = 'צריך שם'; return; }
+  const r = await gxFetch('/store/' + encodeURIComponent(gxStore()) + '/settings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+  if (!r.ok) { st.textContent = r.data.error || 'לא נשמר'; return; }
+  gxAddMine(gxStore(), name, gxTokenFor(gxStore()));
+  __gxStoreCache = null;
+  st.textContent = 'נשמר ✓';
+  await gxLoadStores(gxStore());
+}
+
+async function gxExportData() {
+  try {
+    const res = await fetch(gxApi() + '/store/' + encodeURIComponent(gxStore()) + '/export',
+                            { headers: { 'X-Store-Token': gxTokenFor(gxStore()) || '' } });
+    if (!res.ok) { gxToast('הייצוא נכשל', true); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'genius-' + gxStore() + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    gxToast('הקובץ ירד');
+  } catch (e) { gxToast('אין חיבור לשרת', true); }
+}
+
+async function gxDeleteStore(btn) {
+  if (btn.dataset.armed !== '1') {
+    btn.dataset.armed = '1'; btn.textContent = 'למחיקה סופית — לחץ שוב';
+    setTimeout(() => { if (btn.dataset.armed === '1') { btn.dataset.armed = ''; btn.textContent = 'מחק את החנות'; } }, 6000);
+    return;
+  }
+  const id = gxStore();
+  const r = await gxFetch('/store/' + encodeURIComponent(id), { method: 'DELETE' });
+  if (!r.ok) { gxToast(r.data.error || 'לא נמחק', true); return; }
+  const m = gxMine(); delete m[id]; gxSetMine(m);
+  __gxStoreCache = null;
+  gxToast('החנות נמחקה');
+  await gxLoadStores();
+  show('overview');
 }
 
 // ═══ Suppliers and ready-to-send orders ═══
@@ -2318,6 +2397,7 @@ function show(id) {
   if (id === 'production') loadProduction();
   if (id === 'report') loadReport();
   if (id === 'suppliers') loadSuppliers();
+  if (id === 'settings') loadSettings();
   if (id === 'dashboard' || id === 'stores' || id === 'alerts-admin') loadAdmin(id);
   if (id === 'onboard') obReset();
 }
@@ -2466,7 +2546,7 @@ async function sendChat(role) {
 }
 
 // ── Mockup screens are labelled so nobody mistakes them for live data ──
-const GX_MOCKUPS = ['ads', 'settings', 'admin-chat',
+const GX_MOCKUPS = ['ads', 'admin-chat',
   'sup-dashboard', 'sup-orders', 'sup-quotes', 'sup-history', 'sup-catalog', 'sup-delivery', 'sup-settings'];
 function gxLabelMockups() {
   GX_MOCKUPS.forEach(id => {
