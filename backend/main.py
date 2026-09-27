@@ -1433,6 +1433,21 @@ def nightly_job():
                     _save_rule_analysis(db, store_id)
                 except Exception as e:
                     print(f"  ! analysis failed for {store_id}: {e}")
+                # weekly report every Sunday: sent if WhatsApp is connected,
+                # otherwise kept in the store's queue and shown on the site
+                if datetime.now().weekday() == 6:
+                    try:
+                        rep = compose_weekly_report(db, store_id)
+                        if "error" not in rep:
+                            ready, _reason = report_channel_state(store)
+                            if ready:
+                                outbox.append((store.get("phone"), rep["text"]))
+                            else:
+                                q = (store.get("report_queue") or []) + [
+                                    {"created": datetime.now().isoformat(), "text": rep["text"]}]
+                                store["report_queue"] = q[-REPORT_QUEUE_MAX:]
+                    except Exception as e:
+                        print(f"  ! weekly report failed for {store_id}: {e}")
         save_db(db)
     for ph, msg in outbox:
         send_whatsapp(ph, msg)
@@ -3317,6 +3332,202 @@ def production(store_id):
     plan["store_id"] = store_id
     plan["store_name"] = store.get("name")
     return jsonify(plan)
+
+# ===========================================
+# דוח שבועי ל-WhatsApp — נבנה מהנתונים, מחכה לשליחה
+# ===========================================
+# The text is built from the store's own numbers. Until WhatsApp is connected
+# (Twilio), a report is kept in a queue on the store instead of being sent,
+# so nothing is lost and nothing is faked.
+
+REPORT_QUEUE_MAX = 10
+
+
+def _sum_between(sales, price_of, metric, start, end, only_weekdays=None):
+    """
+    Totals for a date range, holidays left out. `only_weekdays` limits it to
+    the given weekdays, so two weeks are compared on the same kind of days —
+    otherwise a missing Friday alone would look like a crash.
+    """
+    total, per_product, days, weekdays = 0.0, {}, set(), set()
+    for name, hist in sales.items():
+        for d, q in hist:
+            if d is None or not (start <= d.date() <= end) or holiday_of(d):
+                continue
+            if only_weekdays is not None and _he_dow(d) not in only_weekdays:
+                continue
+            v = q * (price_of(name) or 0) if metric == "revenue" else q
+            total += v
+            per_product[name] = per_product.get(name, 0) + v
+            days.add(d.date())
+            weekdays.add(_he_dow(d))
+    return total, per_product, len(days), weekdays
+
+
+def compose_weekly_report(db, store_id, today=None):
+    """Returns {"text": ..., "lines": [...], "metric": ...} or {"error": ...}."""
+    store = db["stores"].get(store_id)
+    if not store:
+        return {"error": "store not found"}
+    sales = parse_sales_csv(store.get("sales_csv") or "")
+    dates = [d for h in sales.values() for d, _ in h if d is not None]
+    if not dates:
+        return {"error": "no sales data"}
+    prices = store.get("prices") or {}
+    price_of = _stock_lookup(prices)
+    metric = "revenue" if price_coverage(sales, prices) >= 0.5 else "units"
+    money = (lambda v: "₪%s" % format(int(round(v)), ",")) if metric == "revenue" else (lambda v: "%d יח'" % round(v))
+
+    last = max(dates).date()
+    this_from, this_to = last - timedelta(days=6), last
+    prev_from, prev_to = last - timedelta(days=13), last - timedelta(days=7)
+    _, _, _, this_wd = _sum_between(sales, price_of, metric, this_from, this_to)
+    _, _, _, prev_wd = _sum_between(sales, price_of, metric, prev_from, prev_to)
+    shared = this_wd & prev_wd            # the weekdays both weeks actually had
+    this_total, this_prod, this_days, _ = _sum_between(sales, price_of, metric, this_from, this_to)
+    cmp_this, cmp_this_prod, cmp_this_days, _ = _sum_between(sales, price_of, metric, this_from, this_to, shared)
+    cmp_prev, cmp_prev_prod, cmp_prev_days, _ = _sum_between(sales, price_of, metric, prev_from, prev_to, shared)
+    # compare per ordinary day, so a holiday (or a closed day) doesn't skew it
+    this_rate = (cmp_this / cmp_this_days) if cmp_this_days else 0
+    prev_rate = (cmp_prev / cmp_prev_days) if cmp_prev_days else 0
+    hol_names = []
+    for i in range((this_to - prev_from).days + 1):
+        h = holiday_of(prev_from + timedelta(days=i))
+        if h and h[1] not in hol_names:
+            hol_names.append(h[1])
+
+    lines = ["📊 דוח שבועי — %s" % store.get("name"),
+             "%s–%s" % (this_from.strftime("%d/%m"), this_to.strftime("%d/%m")), ""]
+    if prev_rate > 0:
+        change = (this_rate - prev_rate) / prev_rate * 100
+        arrow = "↑" if change > 1 else ("↓" if change < -1 else "→")
+        lines.append("מכירות השבוע: %s (%s %.0f%% מהשבוע שלפני)" % (money(this_total), arrow, abs(change)))
+    else:
+        lines.append("מכירות השבוע: %s" % money(this_total))
+    if hol_names:
+        lines.append("(ההשוואה בלי ימי חג: %s)" % ", ".join(hol_names))
+    if (datetime.now().date() - last).days > 10:
+        lines.append("הנתונים האחרונים שהעלית הם מ-%s." % last.strftime("%d/%m"))
+
+    movers = []
+    for name in set(cmp_this_prod) | set(cmp_prev_prod):
+        # per ordinary day in each week, for the same reason as the total above
+        a = (cmp_prev_prod.get(name, 0) / cmp_prev_days) if cmp_prev_days else 0
+        b = (cmp_this_prod.get(name, 0) / cmp_this_days) if cmp_this_days else 0
+        if max(a, b) * 7 >= 5:
+            movers.append((name, b - a, ((b - a) / a * 100) if a else 100.0))
+    up = sorted([m for m in movers if m[2] > 15], key=lambda m: -m[1])[:2]
+    down = sorted([m for m in movers if m[2] < -15], key=lambda m: m[1])[:2]
+    if up:
+        lines.append("עלו: " + ", ".join("%s +%.0f%%" % (n, p) for n, _, p in up))
+    if down:
+        lines.append("ירדו: " + ", ".join("%s %.0f%%" % (n, p) for n, _, p in down))
+
+    analysis, _ = latest_analysis(db, store_id)
+    dead = analysis.get("dead_products") or []
+    hot = [p for p in (analysis.get("hot_products") or []) if (p.get("order_quantity") or 0) > 0]
+    if hot:
+        lines.append("")
+        lines.append("⚠️ להזמין: " + ", ".join("%s (%s יח')" % (p.get("name"), p.get("order_quantity")) for p in hot[:3]))
+    if dead:
+        worst = dead[0]
+        stuck = analysis.get("stuck_value") or 0
+        lines.append("📦 לא זז: %s%s%s" % (
+            worst.get("name"),
+            (" — %d ימים" % worst["days_no_sale"]) if worst.get("days_no_sale") else "",
+            (" · סה\"כ ₪%s תקועים במלאי" % format(int(stuck), ",")) if stuck and metric == "revenue" else ""))
+
+    # the coming holiday, with what the store's own eves looked like
+    up_hol = [u for u in upcoming_holidays(today or datetime.now().date(), 14) if u["kind"] == "erev"]
+    if up_hol:
+        u = up_hol[0]
+        when = "מחר" if u["in_days"] == 1 else ("היום" if u["in_days"] == 0 else "בעוד %d ימים" % u["in_days"])
+        plan = production_plan(store, datetime.strptime(u["date"], "%Y-%m-%d"))
+        top = [r for r in plan.get("products", []) if r["suggested"] > 0][:2] if "error" not in plan else []
+        lines.append("")
+        lines.append("🕯️ %s %s." % (u["name"], when))
+        if top and any(r.get("holiday_basis") == "measured" for r in plan.get("products", [])):
+            lines.append("לפי ערבי חג קודמים בנתונים שלך כדאי להיערך ל: " +
+                         ", ".join("%s %d יח'" % (r["product"], r["suggested"]) for r in top))
+        elif top:
+            lines.append("אין עדיין ערב חג קודם בנתונים שלך, אז זו הערכה של יום רגיל: " +
+                         ", ".join("%s %d יח'" % (r["product"], r["suggested"]) for r in top) +
+                         ". כדאי להוסיף מרווח.")
+    lines.append("")
+    lines.append("לפרטים ולגרפים: האתר של Genius.")
+    text = "\n".join(lines).strip()
+    return {"text": text, "metric": metric, "week": [this_from.strftime("%Y-%m-%d"), this_to.strftime("%Y-%m-%d")],
+            "data_until": last.strftime("%Y-%m-%d")}
+
+
+def report_channel_state(store):
+    """Can this report actually be delivered right now?"""
+    if not normalize_phone(store.get("phone")):
+        return False, "אין טלפון רשום לחנות — אפשר להוסיף במסך ההרשמה"
+    if not TWILIO_SID:
+        return False, "WhatsApp עדיין לא מחובר (Twilio). הדוח נשמר בתור וממתין"
+    if not is_entitled(store):
+        return False, "המנוי לא פעיל"
+    return True, None
+
+
+@app.route("/report/<store_id>", methods=["GET"])
+def weekly_report(store_id):
+    db = load_db()
+    store, err = get_readable_store(db, store_id)
+    if err:
+        return err
+    rep = compose_weekly_report(db, store_id)
+    if "error" in rep:
+        return jsonify(rep), 404
+    ready, reason = report_channel_state(store)
+    rep.update({"store_id": store_id, "store_name": store.get("name"),
+                "can_send": ready, "reason": reason,
+                "queued": store.get("report_queue") or []})
+    return jsonify(rep)
+
+
+@app.route("/report/<store_id>/send", methods=["POST"])
+def send_weekly_report(store_id):
+    """Sends the report if WhatsApp is connected; otherwise queues it."""
+    text = None
+    with db_lock():
+        db = load_db()
+        store = db["stores"].get(store_id)
+        if not store or not can_read(store):
+            return deny()
+        rep = compose_weekly_report(db, store_id)
+        if "error" in rep:
+            return jsonify(rep), 404
+        if store.get("demo"):
+            return jsonify({"sent": False, "queued": False, "demo": True, "text": rep["text"],
+                            "reason": "חנות דמו — הדוח מוצג בלבד, לא נשלח ולא נשמר"})
+        if not can_write(store):
+            return deny()
+        ready, reason = report_channel_state(store)
+        entry = {"created": datetime.now().isoformat(), "text": rep["text"]}
+        if ready:
+            text, phone = rep["text"], store.get("phone")
+        else:
+            queue = (store.get("report_queue") or []) + [entry]
+            store["report_queue"] = queue[-REPORT_QUEUE_MAX:]
+            save_db(db)
+    if text is None:
+        return jsonify({"sent": False, "queued": True, "reason": reason, "text": rep["text"]})
+    ok = send_whatsapp(phone, text)
+    return jsonify({"sent": bool(ok), "queued": False, "text": rep["text"]})
+
+
+@app.route("/report/<store_id>/queue", methods=["DELETE"])
+def clear_report_queue(store_id):
+    with db_lock():
+        db = load_db()
+        store = db["stores"].get(store_id)
+        if not store or not can_write(store):
+            return deny()
+        store["report_queue"] = []
+        save_db(db)
+    return jsonify({"cleared": True})
 
 # ===========================================
 # Bakery demo — day-of-week demand is the whole story

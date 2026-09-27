@@ -10,6 +10,7 @@ import json
 import hmac
 import time
 import hashlib
+import re
 import tempfile
 import threading
 
@@ -867,6 +868,57 @@ def test_production_plan_confidence_reflects_history():
     tok = upload(sid, daily_csv(days=10)).json["store_token"]      # ~1-2 of each weekday
     p = C.get("/production/" + sid, headers={"X-Store-Token": tok}).json
     assert all(r["confidence"] in ("low", "medium") for r in p["products"]), p["products"]
+
+
+# ---------------- weekly report ----------------
+
+def test_weekly_report_text_from_real_numbers():
+    r = C.get("/report/demo_bakery").json
+    assert "מאפיית לחם הארץ" in r["text"] and "מכירות השבוע" in r["text"]
+    assert r["can_send"] is False and "WhatsApp" in r["reason"]     # not connected here
+    assert "ההשוואה בלי ימי חג" in r["text"]                        # holidays named, not silently dropped
+
+
+def test_weekly_report_compares_the_same_weekdays():
+    """A week whose Friday was a holiday eve must not read as a collapse."""
+    from datetime import datetime, timedelta
+    rows = ["date,product,qty"]
+    d = datetime(2026, 8, 24)
+    while d <= datetime(2026, 9, 20):
+        if not (main.holiday_of(d) or ("", ""))[0] == "chag":
+            qty = 100 if (d.weekday() + 1) % 7 == 6 else 10        # Fridays are huge
+            rows.append("%s,לחם,%d" % (d.strftime("%Y-%m-%d"), qty))
+        d += timedelta(days=1)
+    sid = new_id()
+    tok = upload(sid, "\n".join(rows)).json["store_token"]
+    txt = C.get("/report/" + sid, headers={"X-Store-Token": tok}).json["text"]
+    pct = int(re.search(r"([0-9]+)%", txt).group(1)) if re.search(r"([0-9]+)%", txt) else 0
+    assert pct <= 5, txt      # flat week over week, despite the missing Friday
+
+
+def test_weekly_report_queues_until_whatsapp_is_connected():
+    sid = new_id()
+    tok = upload(sid, daily_csv()).json["store_token"]
+    r = C.post("/report/%s/send" % sid, headers={"X-Store-Token": tok}).json
+    assert r["sent"] is False and r["queued"] is True and "טלפון" in r["reason"]
+    assert len(C.get("/report/" + sid, headers={"X-Store-Token": tok}).json["queued"]) == 1
+    for _ in range(12):
+        C.post("/report/%s/send" % sid, headers={"X-Store-Token": tok})
+    assert len(main.load_db()["stores"][sid]["report_queue"]) == main.REPORT_QUEUE_MAX
+    assert C.delete("/report/%s/queue" % sid, headers={"X-Store-Token": tok}).json["cleared"] is True
+    assert main.load_db()["stores"][sid]["report_queue"] == []
+
+
+def test_weekly_report_on_a_demo_store_changes_nothing():
+    r = C.post("/report/demo_makolet/send").json
+    assert r["demo"] is True and r["sent"] is False and r["queued"] is False
+    assert not main.load_db()["stores"]["demo_makolet"].get("report_queue")
+
+
+def test_weekly_report_needs_access():
+    sid = new_id()
+    upload(sid, daily_csv())
+    assert C.get("/report/" + sid).status_code == 403
 
 
 def test_nightly_runs_once_per_day():

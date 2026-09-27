@@ -617,6 +617,7 @@ select.fi { cursor: pointer; }
       <div class="ni" onclick="show('trends')"><i class="ti ti-chart-line"></i> גרפים וטרנדים</div>
       <div class="ni" onclick="show('forecast')"><i class="ti ti-chart-arrows-vertical"></i> חיזוי ביקוש</div>
       <div class="ni" onclick="show('production')"><i class="ti ti-bread"></i> כמה להכין</div>
+      <div class="ni" onclick="show('report')"><i class="ti ti-report"></i> דוח שבועי</div>
       <div class="ni" onclick="show('chat')"><i class="ti ti-robot"></i> סוכן AI</div>
       <div class="nav-sep">חוץ-חנות</div>
       <div class="ni" onclick="show('network')"><i class="ti ti-arrows-exchange"></i> העברת מלאי</div>
@@ -746,6 +747,13 @@ select.fi { cursor: pointer; }
       <div class="sc" id="sc-production">
         <div id="production-body">
           <div class="net-card"><div class="net-sub">מחשב כמה להכין…</div></div>
+        </div>
+      </div>
+
+      <!-- ═══ STORE: Weekly report ═══ -->
+      <div class="sc" id="sc-report">
+        <div id="report-body">
+          <div class="net-card"><div class="net-sub">מכין את הדוח…</div></div>
         </div>
       </div>
 
@@ -1176,7 +1184,7 @@ select.fi { cursor: pointer; }
 // ── Navigation ──
 const screenTitles = {
   overview: 'סקירה — כהן פארם', products: 'מוצרים ומלאי', trends: 'גרפים וטרנדים',
-  chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת', production: 'כמה להכין',
+  chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת', production: 'כמה להכין', report: 'דוח שבועי',
   ads: 'פרסום חכם', connect: 'חיבור נתונים', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
   stores: 'ניהול חנויות', 'alerts-admin': 'התראות', onboard: 'צרף חנות חדשה',
   'admin-chat': 'סוכן AI — מנהל',
@@ -1500,6 +1508,68 @@ async function loadProduction(date) {
       gxEsc(d.date.slice(8,10) + '/' + d.date.slice(5,7)) + '</div>' + table +
     '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + gxEsc(d.based_on_days) +
       ' ימי מכירה רגילים בשמונה השבועות האחרונים שבנתונים. הטווח הוא הפיזור בפועל של אותו יום בשבוע.</div>';
+}
+
+// ═══ Weekly WhatsApp report ═══
+async function loadReport() {
+  const box = document.getElementById('report-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">מכין את הדוח…</div></div>';
+  const d = await gxLoadInto(box, '/report/' + encodeURIComponent(gxStore()), 'loadReport');
+  if (!d) return;
+  const state = d.can_send
+    ? '<span class="tag g">מוכן לשליחה ב-WhatsApp</span>'
+    : '<span class="tag a">' + gxEsc(d.reason || 'לא ניתן לשלוח כרגע') + '</span>';
+  const queued = (d.queued || []).length
+    ? '<div class="net-card"><div class="net-title">דוחות שממתינים לשליחה (' + gxEsc(d.queued.length) + ')</div>' +
+      '<div class="net-sub">נשמרו עד שה-WhatsApp יחובר. אפשר להעתיק אותם ולשלוח ידנית.</div>' +
+      '<div class="net-row"><button class="btn" onclick="gxClearQueue()">נקה את התור</button></div></div>'
+    : '';
+  box.innerHTML =
+    '<div class="net-card"><div class="net-title">הדוח של השבוע</div>' +
+      '<div class="net-sub">נבנה מהמכירות שלך עד ' + gxEsc(d.data_until) + '. ' +
+      'אפשר להעתיק ולשלוח בעצמך, וכשה-WhatsApp יחובר הוא יישלח אוטומטית בכל יום ראשון.</div>' +
+      '<div class="net-row" style="margin-top:8px">' + state + '</div></div>' +
+    '<div class="net-card"><pre id="report-text" style="white-space:pre-wrap;font-family:var(--font);font-size:13px;margin:0;line-height:1.7">' +
+      gxEsc(d.text) + '</pre>' +
+      '<div class="net-row" style="margin-top:12px">' +
+        '<button class="btn" onclick="gxCopyReport()">העתק</button>' +
+        '<button class="btn btnp" onclick="gxSendReport()">' + (d.can_send ? 'שלח עכשיו ב-WhatsApp' : 'שמור לשליחה') + '</button>' +
+      '</div><div id="report-status" role="status" style="font-size:12px;color:var(--text2);margin-top:8px"></div></div>' +
+    queued;
+}
+
+function gxCopyReport() {
+  const t = (document.getElementById('report-text') || {}).textContent || '';
+  const done = () => { document.getElementById('report-status').textContent = 'הועתק ✓'; };
+  try {
+    navigator.clipboard.writeText(t).then(done, () => {
+      const r = document.createRange(); r.selectNodeContents(document.getElementById('report-text'));
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      document.getElementById('report-status').textContent = 'הטקסט מסומן — אפשר להעתיק עם Cmd/Ctrl+C';
+    });
+  } catch (e) {
+    document.getElementById('report-status').textContent = 'לא הצלחנו להעתיק אוטומטית — סמן את הטקסט והעתק';
+  }
+}
+
+async function gxSendReport() {
+  const st = document.getElementById('report-status');
+  st.textContent = 'שולח…';
+  try {
+    const r = await gxFetch('/report/' + encodeURIComponent(gxStore()) + '/send', { method: 'POST' });
+    if (!r.ok) { st.textContent = r.data.error || 'לא הצלחנו לשלוח'; return; }
+    st.textContent = r.data.demo ? 'חנות דמו — שום הודעה לא נשלחה'
+      : (r.data.sent ? 'נשלח ב-WhatsApp ✓' : 'נשמר בתור — יישלח כשה-WhatsApp יחובר');
+    if (!r.data.demo) loadReport();
+  } catch (e) { st.textContent = 'אין חיבור לשרת'; }
+}
+
+async function gxClearQueue() {
+  try {
+    await gxFetch('/report/' + encodeURIComponent(gxStore()) + '/queue', { method: 'DELETE' });
+    loadReport();
+  } catch (e) { gxToast('לא הצלחנו לנקות', true); }
 }
 
 // ═══ Lending (internal estimate, not an offer) ═══
@@ -2024,6 +2094,7 @@ function show(id) {
   if (id === 'forecast') loadForecast();
   if (id === 'lending') loadLending();
   if (id === 'production') loadProduction();
+  if (id === 'report') loadReport();
   if (id === 'onboard') obReset();
 }
 
