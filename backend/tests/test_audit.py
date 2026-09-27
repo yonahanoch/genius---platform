@@ -831,6 +831,44 @@ def test_upcoming_holidays():
     assert up[0] == {"date": "2026-09-25", "kind": "erev", "name": "ערב סוכות", "in_days": 3}
 
 
+# ---------------- daily production plan ----------------
+
+def test_production_plan_uses_that_weekday_and_holiday_eves():
+    p = C.get("/production/demo_bakery?date=2026-10-02").json      # erev Simchat Torah, a Friday
+    assert p["weekday"] == "שישי" and p["holiday"]["kind"] == "erev"
+    challah = [r for r in p["products"] if r["product"] == "חלה מתוקה"][0]
+    assert challah["holiday_basis"] == "measured" and challah["holiday_factor"] > 1.5
+    assert challah["suggested"] > challah["weekday_avg"]           # eve, so more than a normal Friday
+    assert challah["range_low"] <= challah["suggested"] <= challah["range_high"]
+    assert p["products"][0]["product"] == "חלה מתוקה"              # the biggest line first
+    ordinary = C.get("/production/demo_bakery?date=2026-09-24").json   # a Thursday
+    ch2 = [r for r in ordinary["products"] if r["product"] == "חלה מתוקה"][0]
+    assert ch2["suggested"] < challah["suggested"] and ordinary["holiday"] is None
+
+
+def test_production_plan_says_closed_on_a_holiday():
+    p = C.get("/production/demo_bakery?date=2026-10-03").json
+    assert p["holiday"]["kind"] == "chag" and "סגורה" in p["note"]
+    assert all(r["suggested"] == 0 for r in p["products"])
+
+
+def test_production_plan_flags_stale_data_and_bad_input():
+    p = C.get("/production/demo_bakery?date=2027-01-05").json
+    assert p["stale_days"] > 14 and "לא מעודכנת" in p["stale_note"]
+    assert C.get("/production/demo_bakery?date=nonsense").status_code == 400
+    sid = new_id()
+    tok = upload(sid, daily_csv()).json["store_token"]
+    assert C.get("/production/" + sid).status_code == 403          # needs the store's key
+    assert C.get("/production/" + sid, headers={"X-Store-Token": tok}).status_code == 200
+
+
+def test_production_plan_confidence_reflects_history():
+    sid = new_id()
+    tok = upload(sid, daily_csv(days=10)).json["store_token"]      # ~1-2 of each weekday
+    p = C.get("/production/" + sid, headers={"X-Store-Token": tok}).json
+    assert all(r["confidence"] in ("low", "medium") for r in p["products"]), p["products"]
+
+
 def test_nightly_runs_once_per_day():
     main.nightly_job()
     first = main.load_db()["meta"]["nightly_last"]

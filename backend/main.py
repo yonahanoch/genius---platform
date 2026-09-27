@@ -3184,6 +3184,141 @@ def trends(store_id):
     })
 
 # ===========================================
+# כמה להכין למחר — לטריות שנאפות/מוכנות כל יום
+# ===========================================
+# Fresh goods have no shelf stock to count down, so the reorder forecast
+# doesn't fit them. This estimates demand for a given day from the store's
+# own history: the usual level, that weekday's shape, the recent trend and
+# the holiday calendar. Every number here is measured, never a default —
+# when there isn't enough history for a product, it says so.
+
+PRODUCTION_WEEKS = 8
+
+
+def production_plan(store, target_date, weeks=PRODUCTION_WEEKS):
+    sales = parse_sales_csv(store.get("sales_csv") or "")
+    prices = store.get("prices") or {}
+    price_of = _stock_lookup(prices)
+    dates = [d for h in sales.values() for d, _ in h if d is not None]
+    if not dates:
+        return {"error": "no sales data"}
+    last = max(dates)
+    window_start = last - timedelta(days=weeks * 7 - 1)
+
+    # units per product per day, ordinary days only (holidays are their own story)
+    per_day = {}
+    for name, hist in sales.items():
+        for d, q in hist:
+            if d is None or d < window_start:
+                continue
+            bucket = per_day.setdefault(name, {})
+            bucket[d.date()] = bucket.get(d.date(), 0) + q
+    open_days = sorted({d.date() for d in dates if d >= window_start})
+    normal_days = [d for d in open_days if not holiday_of(d)]
+    if not normal_days:
+        return {"error": "no ordinary days in the window"}
+
+    target = target_date
+    hol = holiday_of(target)
+    dow = _he_dow(target)
+    same_dow = [d for d in normal_days if _he_dow(d) == dow]
+    recent = [d for d in normal_days if (last.date() - d).days < 14]
+    earlier = [d for d in normal_days if 14 <= (last.date() - d).days < 28]
+
+    # how much bigger a holiday eve has been for this store, measured
+    eve_days = [d for d in open_days if (holiday_of(d) or ("", ""))[0] == "erev"]
+
+    rows = []
+    for name, days in per_day.items():
+        obs = [days.get(d, 0) for d in same_dow]
+        if not obs:
+            continue
+        avg_dow = sum(obs) / len(obs)
+        spread = (sum((v - avg_dow) ** 2 for v in obs) / len(obs)) ** 0.5 if len(obs) > 1 else 0.0
+
+        r_avg = (sum(days.get(d, 0) for d in recent) / len(recent)) if recent else 0
+        e_avg = (sum(days.get(d, 0) for d in earlier) / len(earlier)) if earlier else 0
+        trend = 1.0
+        if e_avg > 0 and recent and earlier:
+            trend = max(0.8, min(1.25, r_avg / e_avg))     # capped: two weeks can't prove a lot
+
+        holiday_factor, holiday_basis = 1.0, None
+        if hol and hol[0] == "erev":
+            own = [days.get(d, 0) for d in eve_days]
+            base_same = [days.get(d, 0) for d in normal_days if _he_dow(d) == dow]
+            base = (sum(base_same) / len(base_same)) if base_same else 0
+            if own and base > 0 and sum(own) > 0:
+                holiday_factor = (sum(own) / len(own)) / base
+                holiday_basis = "measured"
+            else:
+                holiday_basis = "unknown"
+        elif hol and hol[0] == "chag":
+            holiday_factor = 0.0
+            holiday_basis = "closed"
+
+        expected = avg_dow * trend * holiday_factor
+        low = max(0, expected - spread * trend * holiday_factor)
+        high = expected + spread * trend * holiday_factor
+        conf = "high" if len(obs) >= 6 else ("medium" if len(obs) >= 3 else "low")
+        rows.append({
+            "product": name,
+            "suggested": int(round(expected)),
+            "range_low": int(round(low)),
+            "range_high": int(round(high)),
+            "weekday_avg": round(avg_dow, 1),
+            "trend_factor": round(trend, 2),
+            "holiday_factor": round(holiday_factor, 2) if hol else None,
+            "holiday_basis": holiday_basis,
+            "observations": len(obs),
+            "confidence": conf,
+            "price": price_of(name),
+        })
+    rows.sort(key=lambda r: -r["suggested"])
+    total_value = sum((r["suggested"] * (r["price"] or 0)) for r in rows)
+    stale_days = (target.date() - last.date()).days
+    return {
+        "date": target.strftime("%Y-%m-%d"),
+        "weekday": HE_DAYS[dow],
+        "holiday": {"kind": hol[0], "name": hol[1]} if hol else None,
+        "based_on_days": len(normal_days),
+        "same_weekday_days": len(same_dow),
+        "data_until": last.strftime("%Y-%m-%d"),
+        "products": rows,
+        "expected_value": int(round(total_value)) if total_value else None,
+        "stale_days": stale_days,
+        "stale_note": ("הנתונים האחרונים הם מ-%s, %d ימים לפני היום המבוקש — ההערכה עלולה להיות לא מעודכנת."
+                       % (last.strftime("%d/%m/%Y"), stale_days)) if stale_days > 14 else None,
+        "note": ("החנות סגורה בחג — אין מה להכין." if hol and hol[0] == "chag" else
+                 ("ערב חג: ההערכה מבוססת על ערבי חג קודמים בנתונים שלך."
+                  if hol and hol[0] == "erev" and any(r["holiday_basis"] == "measured" for r in rows)
+                  else ("ערב חג: אין עדיין ערב חג בנתונים שלך, אז ההערכה היא של יום רגיל — כדאי להוסיף מרווח."
+                        if hol and hol[0] == "erev" else None))),
+    }
+
+
+@app.route("/production/<store_id>", methods=["GET"])
+def production(store_id):
+    """How much to prepare for a given day (default: tomorrow)."""
+    db = load_db()
+    store, err = get_readable_store(db, store_id)
+    if err:
+        return err
+    raw = request.args.get("date")
+    if raw:
+        try:
+            target = datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    else:
+        target = datetime.combine(datetime.now().date() + timedelta(days=1), datetime.min.time())
+    plan = production_plan(store, target)
+    if "error" in plan:
+        return jsonify(plan), 404
+    plan["store_id"] = store_id
+    plan["store_name"] = store.get("name")
+    return jsonify(plan)
+
+# ===========================================
 # Bakery demo — day-of-week demand is the whole story
 # ===========================================
 

@@ -616,6 +616,7 @@ select.fi { cursor: pointer; }
       <div class="ni" onclick="show('products')"><i class="ti ti-package"></i> מוצרים <span class="nb" id="nb-products" style="display:none"></span></div>
       <div class="ni" onclick="show('trends')"><i class="ti ti-chart-line"></i> גרפים וטרנדים</div>
       <div class="ni" onclick="show('forecast')"><i class="ti ti-chart-arrows-vertical"></i> חיזוי ביקוש</div>
+      <div class="ni" onclick="show('production')"><i class="ti ti-bread"></i> כמה להכין</div>
       <div class="ni" onclick="show('chat')"><i class="ti ti-robot"></i> סוכן AI</div>
       <div class="nav-sep">חוץ-חנות</div>
       <div class="ni" onclick="show('network')"><i class="ti ti-arrows-exchange"></i> העברת מלאי</div>
@@ -738,6 +739,13 @@ select.fi { cursor: pointer; }
       <div class="sc" id="sc-forecast">
         <div id="forecast-body">
           <div class="net-card"><div class="net-sub">מחשב תחזית…</div></div>
+        </div>
+      </div>
+
+      <!-- ═══ STORE: Daily production plan ═══ -->
+      <div class="sc" id="sc-production">
+        <div id="production-body">
+          <div class="net-card"><div class="net-sub">מחשב כמה להכין…</div></div>
         </div>
       </div>
 
@@ -1168,7 +1176,7 @@ select.fi { cursor: pointer; }
 // ── Navigation ──
 const screenTitles = {
   overview: 'סקירה — כהן פארם', products: 'מוצרים ומלאי', trends: 'גרפים וטרנדים',
-  chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת',
+  chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת', production: 'כמה להכין',
   ads: 'פרסום חכם', connect: 'חיבור נתונים', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
   stores: 'ניהול חנויות', 'alerts-admin': 'התראות', onboard: 'צרף חנות חדשה',
   'admin-chat': 'סוכן AI — מנהל',
@@ -1427,6 +1435,71 @@ async function loadForecast() {
       '<div class="net-row">' + tag + action + '</div></div>';
   }).join('');
   box.innerHTML = note + metrics + '<div class="sec" style="margin-bottom:12px">תחזית לפי דחיפות</div>' + cards;
+}
+
+// ═══ How much to prepare for a chosen day ═══
+let __gxProdDate = null;
+
+function gxProdDates() {
+  const days = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+  const out = [];
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(); d.setDate(d.getDate() + i);
+    const iso = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    const label = (i === 1 ? 'מחר' : 'יום ' + days[d.getDay()]) + ' · ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
+    out.push({ iso, label });
+  }
+  return out;
+}
+
+async function loadProduction(date) {
+  const box = document.getElementById('production-body');
+  if (!box) return;
+  __gxProdDate = date || __gxProdDate || gxProdDates()[0].iso;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">מחשב כמה להכין…</div></div>';
+  const d = await gxLoadInto(box, '/production/' + encodeURIComponent(gxStore()) + '?date=' + __gxProdDate, 'loadProduction');
+  if (!d) return;
+  const picker = '<div class="net-card"><div class="net-row" style="align-items:center;gap:10px">' +
+    '<label class="fl" for="prod-date" style="margin:0">ליום</label>' +
+    '<select class="fi" id="prod-date" style="max-width:220px" onchange="loadProduction(this.value)">' +
+    gxProdDates().map(o => '<option value="' + o.iso + '"' + (o.iso === __gxProdDate ? ' selected' : '') + '>' +
+      gxEsc(o.label) + '</option>').join('') + '</select>' +
+    '<span style="font-size:12px;color:var(--text3)">נתונים עד ' + gxEsc(d.data_until) + '</span>' +
+    '</div></div>';
+  const notes = [d.holiday ? (d.holiday.kind === 'chag' ? 'חג: ' : 'ערב חג: ') + gxEsc(d.holiday.name) : '',
+                 d.note ? gxEsc(d.note) : '', d.stale_note ? gxEsc(d.stale_note) : '']
+    .filter(Boolean).map(t => '<div class="net-card" style="border-color:var(--amber)"><div class="net-sub" style="color:var(--amber)">' + t + '</div></div>').join('');
+  const rows = (d.products || []).filter(r => r.suggested > 0 || !d.holiday);
+  if (!rows.length) {
+    box.innerHTML = picker + notes + gxMsgCard('אין מה להכין ליום הזה', 'לפי הנתונים החנות סגורה או שאין מכירות ביום הזה.');
+    return;
+  }
+  const confTxt = { high: 'ביטחון גבוה', medium: 'ביטחון בינוני', low: 'מעט נתונים' };
+  const table = '<table class="tbl"><thead><tr>' +
+    '<th style="width:30%">מוצר</th><th style="width:16%">להכין</th><th style="width:18%">טווח סביר</th>' +
+    '<th style="width:20%">רגיל ביום הזה</th><th style="width:16%">בסיס</th></tr></thead><tbody>' +
+    rows.map(r => '<tr><td>' + gxEsc(r.product) + '</td>' +
+      '<td><strong>' + gxEsc(r.suggested) + "</strong> יח'</td>" +
+      '<td>' + gxEsc(r.range_low) + '–' + gxEsc(r.range_high) + '</td>' +
+      '<td>' + gxEsc(r.weekday_avg) + " יח'" +
+        (r.trend_factor !== 1 ? ' · מגמה ×' + gxEsc(r.trend_factor) : '') +
+        (r.holiday_factor && r.holiday_factor !== 1 ? ' · ערב חג ×' + gxEsc(r.holiday_factor) : '') + '</td>' +
+      '<td><span class="pill ' + (r.confidence === 'high' ? 'g' : (r.confidence === 'medium' ? 'b' : 'a')) + '">' +
+        gxEsc(confTxt[r.confidence] || r.confidence) + '</span> <span style="font-size:11px;color:var(--text3)">' +
+        gxEsc(r.observations) + ' מדידות</span></td></tr>').join('') +
+    '</tbody></table>';
+  const value = d.expected_value
+    ? '<div class="metrics" style="grid-template-columns:repeat(2,1fr);margin:16px 0">' +
+      '<div class="mc"><div class="ml">שווי המכירות הצפוי</div><div class="mv">' + gxMoney(d.expected_value) +
+        '</div><div class="ms">לפי המחירים שבנתונים</div></div>' +
+      '<div class="mc"><div class="ml">מבוסס על</div><div class="mv">' + gxEsc(d.same_weekday_days) +
+        '</div><div class="ms">ימי ' + gxEsc(d.weekday) + ' רגילים בנתונים</div></div></div>'
+    : '';
+  box.innerHTML = picker + notes + value +
+    '<div class="sec" style="margin:4px 0 12px">כמות מוצעת ליום ' + gxEsc(d.weekday) + ' ' +
+      gxEsc(d.date.slice(8,10) + '/' + d.date.slice(5,7)) + '</div>' + table +
+    '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + gxEsc(d.based_on_days) +
+      ' ימי מכירה רגילים בשמונה השבועות האחרונים שבנתונים. הטווח הוא הפיזור בפועל של אותו יום בשבוע.</div>';
 }
 
 // ═══ Lending (internal estimate, not an offer) ═══
@@ -1950,6 +2023,7 @@ function show(id) {
   if (id === 'network') loadTransfers();
   if (id === 'forecast') loadForecast();
   if (id === 'lending') loadLending();
+  if (id === 'production') loadProduction();
   if (id === 'onboard') obReset();
 }
 
