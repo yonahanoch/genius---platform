@@ -623,7 +623,7 @@ select.fi { cursor: pointer; }
       <div class="ni" onclick="show('network')"><i class="ti ti-arrows-exchange"></i> העברת מלאי</div>
       <div class="ni" onclick="show('bulk')"><i class="ti ti-shopping-cart"></i> קנייה משותפת</div>
       <div class="ni" onclick="show('suppliers')"><i class="ti ti-truck-delivery"></i> ספקים והזמנות</div>
-      <div class="ni" onclick="show('ads')"><i class="ti ti-speakerphone"></i> פרסום חכם</div>
+      <div class="ni" onclick="show('ads')"><i class="ti ti-speakerphone"></i> מבצעים מוצעים</div>
       <div class="ni" onclick="show('lending')"><i class="ti ti-cash"></i> מימון</div>
       <div class="nav-sep">חשבון</div>
       <div class="ni" onclick="show('connect')"><i class="ti ti-plug-connected"></i> חיבור נתונים</div>
@@ -780,64 +780,9 @@ select.fi { cursor: pointer; }
         </div>
       </div>
 
-      <!-- ═══ STORE: Ads ═══ -->
+      <!-- ═══ STORE: Promotions (live) ═══ -->
       <div class="sc" id="sc-ads">
-        <div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
-          <div class="mc"><div class="ml">תקציב חודשי פעיל</div><div class="mv">₪850</div><div class="ms">מ-₪1,000 שהוקצו</div></div>
-          <div class="mc"><div class="ml">ROI ממוצע</div><div class="mv">3.2x</div><div class="ms">↑ על כל ₪1 שהשקעת</div></div>
-          <div class="mc"><div class="ml">הכנסה מפרסום</div><div class="mv">₪2,720</div><div class="ms">החודש</div></div>
-        </div>
-
-        <div class="sec" style="margin-bottom:12px">קמפיינים פעילים</div>
-
-        <div class="net-card">
-          <div class="net-title">קרם SPF 50 — Meta Ads</div>
-          <div class="net-sub">הסוכן יצר: "הגן על עצמך בקיץ — ₪45 בלבד בכהן פארם" • תקציב: ₪300/חודש</div>
-          <div class="net-row">
-            <div style="display:flex;gap:10px;align-items:center">
-              <span class="tag g">פעיל</span>
-              <span class="roi-badge">ROI: 4.1x</span>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn">ערוך</button>
-              <button class="toggle" onclick="this.classList.toggle('off')"></button>
-            </div>
-          </div>
-        </div>
-
-        <div class="net-card">
-          <div class="net-title">שמפו Kerastase — Google Ads</div>
-          <div class="net-sub">הסוכן יצר: "שמפו יוקרה במחיר מיוחד — עד הסוף המלאי" • תקציב: ₪200/חודש</div>
-          <div class="net-row">
-            <div style="display:flex;gap:10px;align-items:center">
-              <span class="tag g">פעיל</span>
-              <span class="roi-badge" style="color:var(--amber)">ROI: 1.8x</span>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn">ערוך</button>
-              <button class="toggle" onclick="this.classList.toggle('off')"></button>
-            </div>
-          </div>
-        </div>
-
-        <div class="net-card">
-          <div class="net-title">סרום ויטמין C — Meta Ads</div>
-          <div class="net-sub">הסוכן יצר: "הסרום שכולן מדברות עליו ☀️" • תקציב: ₪350/חודש</div>
-          <div class="net-row">
-            <div style="display:flex;gap:10px;align-items:center">
-              <span class="tag g">פעיל</span>
-              <span class="roi-badge">ROI: 3.9x</span>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn">ערוך</button>
-              <button class="toggle" onclick="this.classList.toggle('off')"></button>
-            </div>
-          </div>
-        </div>
-
-        <button class="btn btnp" style="width:100%;padding:10px;font-size:13px;margin-top:4px">
-          <i class="ti ti-speakerphone"></i> צור קמפיין חדש עם AI
-        </button>
+        <div id="promo-body"><div class="net-card"><div class="net-sub">מחפש רעיונות למבצע…</div></div></div>
       </div>
 
       <!-- ═══ STORE: Settings (live) ═══ -->
@@ -1135,7 +1080,7 @@ select.fi { cursor: pointer; }
 const screenTitles = {
   overview: 'סקירה — כהן פארם', products: 'מוצרים ומלאי', trends: 'גרפים וטרנדים',
   chat: 'סוכן AI — כהן פארם', network: 'העברת מלאי', bulk: 'קנייה משותפת', production: 'כמה להכין', report: 'דוח שבועי', suppliers: 'ספקים והזמנות',
-  ads: 'פרסום חכם', connect: 'חיבור נתונים', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
+  ads: 'מבצעים מוצעים', connect: 'חיבור נתונים', forecast: 'חיזוי ביקוש', lending: 'מימון', settings: 'הגדרות', dashboard: 'דאשבורד',
   stores: 'ניהול חנויות', 'alerts-admin': 'התראות', onboard: 'צרף חנות חדשה',
   'admin-chat': 'סוכן AI — מנהל',
   'sup-dashboard': 'סקירה — ספק (הדגמה)', 'sup-orders': 'בקשות פתוחות',
@@ -1462,6 +1407,34 @@ async function loadProduction(date) {
       gxEsc(d.date.slice(8,10) + '/' + d.date.slice(5,7)) + '</div>' + table +
     '<div class="net-sub" style="margin-top:12px;font-size:11px">מחושב מ-' + gxEsc(d.based_on_days) +
       ' ימי מכירה רגילים בשמונה השבועות האחרונים שבנתונים. הטווח הוא הפיזור בפועל של אותו יום בשבוע.</div>';
+}
+
+// ═══ Promotion ideas from the store's own numbers ═══
+async function loadPromotions() {
+  const box = document.getElementById('promo-body');
+  if (!box) return;
+  box.innerHTML = '<div class="net-card"><div class="net-sub">מחפש רעיונות למבצע…</div></div>';
+  const d = await gxLoadInto(box, '/promotions/' + encodeURIComponent(gxStore()), 'loadPromotions');
+  if (!d) return;
+  if (!(d.ideas || []).length) {
+    box.innerHTML = gxMsgCard('אין כרגע רעיון שמבוסס על הנתונים',
+      'כשיצטבר מלאי שלא זז, או כשיתקרב חג, נציע כאן מבצע עם הנימוק שמאחוריו.');
+    return;
+  }
+  const icons = { markdown: 'ti-tag', bundle: 'ti-gift', quiet_day: 'ti-calendar', holiday: 'ti-candle' };
+  box.innerHTML = d.ideas.map((i, idx) =>
+    '<div class="net-card"><div class="net-row" style="align-items:flex-start">' +
+      '<div style="flex:1"><div class="net-title"><i class="ti ' + (icons[i.kind] || 'ti-bulb') +
+        '" style="font-size:16px;vertical-align:-2px" aria-hidden="true"></i> ' + gxEsc(i.title) + '</div>' +
+      '<div class="net-sub">למה: ' + gxEsc(i.why) + '</div></div></div>' +
+      '<pre style="white-space:pre-wrap;font-family:var(--font);font-size:13px;margin:10px 0 0;line-height:1.7">' +
+        gxEsc(i.text) + '</pre>' +
+      '<div class="net-row" style="margin-top:10px">' +
+        '<button class="btn" onclick="gxCopyText(this.parentNode.parentNode.querySelector(\'pre\'))">העתק נוסח</button>' +
+        (i.evidence && i.evidence.tied_up ? '<span style="font-size:12px;color:var(--text2)">כסף תקוע בפריט: ' +
+          gxMoney(i.evidence.tied_up) + '</span>' : '') +
+      '</div></div>').join('') +
+    '<div class="net-sub" style="margin-top:12px;font-size:11px">' + gxEsc(d.disclaimer) + '</div>';
 }
 
 // ═══ Settings: name, notifications, network, export, delete ═══
@@ -2398,6 +2371,7 @@ function show(id) {
   if (id === 'report') loadReport();
   if (id === 'suppliers') loadSuppliers();
   if (id === 'settings') loadSettings();
+  if (id === 'ads') loadPromotions();
   if (id === 'dashboard' || id === 'stores' || id === 'alerts-admin') loadAdmin(id);
   if (id === 'onboard') obReset();
 }
@@ -2546,7 +2520,7 @@ async function sendChat(role) {
 }
 
 // ── Mockup screens are labelled so nobody mistakes them for live data ──
-const GX_MOCKUPS = ['ads', 'admin-chat',
+const GX_MOCKUPS = ['admin-chat',
   'sup-dashboard', 'sup-orders', 'sup-quotes', 'sup-history', 'sup-catalog', 'sup-delivery', 'sup-settings'];
 function gxLabelMockups() {
   GX_MOCKUPS.forEach(id => {

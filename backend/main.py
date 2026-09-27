@@ -3964,6 +3964,115 @@ def delete_own_store(store_id):
     return jsonify({"deleted": store_id})
 
 # ===========================================
+# מבצעים מוצעים — מהנתונים, בלי חשבונות פרסום
+# ===========================================
+# Ideas a shop can act on today: clear stuck stock, lift the quiet day, get
+# ready for a holiday eve. Each one says what it is based on and carries a
+# ready-to-post text. What it can't say is how much it will actually sell —
+# that depends on the street, and we don't pretend to know it.
+
+def promotion_ideas(db, store_id, today=None):
+    store = db["stores"].get(store_id) or {}
+    sales = parse_sales_csv(store.get("sales_csv") or "")
+    if not sales:
+        return []
+    prices = store.get("prices") or {}
+    price_of = _stock_lookup(prices)
+    stock_of = _stock_lookup(store.get("stock") or {})
+    analysis, _ = latest_analysis(db, store_id)
+    dates = [d for h in sales.values() for d, _ in h if d is not None]
+    last = max(dates)
+    name = store.get("name") or "החנות"
+    ideas = []
+
+    # 1. stuck stock -> a markdown, with the money actually tied up in it
+    for p in (analysis.get("dead_products") or [])[:2]:
+        price, rec, qty = p.get("current_price"), p.get("recommended_price"), p.get("stock") or 0
+        why = "%s יח' במלאי" % qty + (", %d ימים בלי מכירה" % p["days_no_sale"] if p.get("days_no_sale") else "")
+        text = ("🏷️ מבצע ב%s: %s" % (name, p.get("name")) +
+                ((" — במקום ₪%s רק ₪%s" % (price, rec)) if price and rec else " — במחיר מיוחד") +
+                ". עד גמר המלאי.")
+        ideas.append({"kind": "markdown", "title": "הנחה על %s" % p.get("name"),
+                      "why": why, "evidence": {"stock": qty, "price": price, "suggested_price": rec,
+                                               "tied_up": int(round((qty or 0) * (price or 0))) if price else None},
+                      "text": text})
+
+    # 2. bundle a stuck item with a best seller
+    units, span = recent_sales(sales, 28)
+    best = sorted(((n, u) for n, u in units.items() if u > 0), key=lambda x: -x[1])
+    dead_names = [p.get("name") for p in (analysis.get("dead_products") or [])]
+    if best and dead_names:
+        top, stuck = best[0][0], dead_names[0]
+        pair_price = None
+        if price_of(top) and price_of(stuck):
+            pair_price = int(round((price_of(top) + price_of(stuck)) * 0.85))
+        ideas.append({
+            "kind": "bundle", "title": "חבילה: %s + %s" % (top, stuck),
+            "why": "%s הוא הנמכר ביותר (%d יח' ב-%d הימים האחרונים), %s תקוע" % (top, round(best[0][1]), span, stuck),
+            "evidence": {"top_seller_units": int(round(best[0][1])), "window_days": span,
+                         "bundle_price": pair_price},
+            "text": ("🎁 ב%s: %s + %s ביחד" % (name, top, stuck)) +
+                    ((" ב-₪%d בלבד." % pair_price) if pair_price else " במחיר מיוחד.")})
+
+    # 3. lift the quiet weekday
+    by_dow, days_dow = [0.0] * 7, [set() for _ in range(7)]
+    for n, hist in sales.items():
+        for d, q in hist:
+            if d is None or holiday_of(d) or (last - d).days > 56:
+                continue
+            by_dow[_he_dow(d)] += q * (price_of(n) or 1)
+            days_dow[_he_dow(d)].add(d.date())
+    avgs = [(i, by_dow[i] / len(days_dow[i])) for i in range(7) if days_dow[i]]
+    overall = (sum(a for _, a in avgs) / len(avgs)) if avgs else 0
+    # a day the store barely opens (Shabbat for most) isn't a "quiet day to
+    # lift" — it's a closed day, and a promotion there means nothing. Days
+    # under half the weekly average are treated that way.
+    open_avgs = [(i, a) for i, a in avgs if a >= overall * 0.5]
+    if len(open_avgs) >= 3:
+        quiet = min(open_avgs, key=lambda x: x[1])
+        busy = max(open_avgs, key=lambda x: x[1])
+        if busy[1] >= quiet[1] * 1.5:
+            ratio = busy[1] / quiet[1]
+            ideas.append({
+                "kind": "quiet_day", "title": "מבצע ליום %s" % HE_DAYS[quiet[0]],
+                "why": "יום %s הוא החלש בשבוע — פי %.1f פחות מיום %s" % (HE_DAYS[quiet[0]], ratio, HE_DAYS[busy[0]]),
+                "evidence": {"quiet_day": HE_DAYS[quiet[0]], "busy_day": HE_DAYS[busy[0]],
+                             "ratio": round(ratio, 1)},
+                "text": "📅 כל יום %s ב%s: הטבה מיוחדת ללקוחות. בואו לראות מה יש היום." % (HE_DAYS[quiet[0]], name)})
+
+    # 4. the coming holiday eve, with the items its own eves lifted most
+    up = [u for u in upcoming_holidays(today or datetime.now().date(), 21) if u["kind"] == "erev"]
+    if up:
+        u = up[0]
+        plan = production_plan(store, datetime.strptime(u["date"], "%Y-%m-%d"))
+        rows = [r for r in plan.get("products", []) if r.get("holiday_basis") == "measured"] if "error" not in plan else []
+        rows.sort(key=lambda r: -(r.get("holiday_factor") or 0))
+        if rows:
+            r = rows[0]
+            ideas.append({
+                "kind": "holiday", "title": "%s — להודיע מראש" % u["name"],
+                "why": "%s בעוד %d ימים; בערבי חג קודמים %s נמכר פי %.1f" % (u["name"], u["in_days"], r["product"], r["holiday_factor"]),
+                "evidence": {"holiday": u["name"], "date": u["date"], "in_days": u["in_days"],
+                             "product": r["product"], "lift": round(r["holiday_factor"], 1),
+                             "suggested_units": r["suggested"]},
+                "text": "🕯️ ל%s: ב%s אפשר להזמין מראש %s ולהבטיח שיישאר לכם. הזמנות עד יום קודם." % (u["name"], name, r["product"])})
+    return ideas
+
+
+@app.route("/promotions/<store_id>", methods=["GET"])
+def promotions(store_id):
+    db = load_db()
+    store, err = get_readable_store(db, store_id)
+    if err:
+        return err
+    ideas = promotion_ideas(db, store_id)
+    return jsonify({
+        "store_id": store_id, "store_name": store.get("name"), "ideas": ideas,
+        "disclaimer": "ההצעות מבוססות על המכירות שלך בלבד. אי אפשר לדעת מראש כמה כל מבצע יגדיל מכירות — "
+                      "כדאי לנסות אחד בכל פעם ולראות בגרפים מה קרה.",
+    })
+
+# ===========================================
 # Bakery demo — day-of-week demand is the whole story
 # ===========================================
 

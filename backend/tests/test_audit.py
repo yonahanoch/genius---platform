@@ -1008,6 +1008,51 @@ def test_store_settings_switches_are_saved():
     assert C.get("/store/" + sid).status_code == 403
 
 
+# ---------------- promotion suggestions ----------------
+
+def test_promotions_come_from_the_data_and_carry_their_evidence():
+    d = C.get("/promotions/demo_makolet").json
+    kinds = {i["kind"] for i in d["ideas"]}
+    assert {"markdown", "bundle"} <= kinds, kinds
+    md = [i for i in d["ideas"] if i["kind"] == "markdown"][0]
+    assert md["evidence"]["stock"] == 80 and "ממתקי פורים" in md["text"]
+    assert md["evidence"]["tied_up"] == 80 * 15
+    assert "אי אפשר לדעת מראש" in d["disclaimer"]      # no invented uplift promises
+
+
+def test_promotions_do_not_suggest_a_day_the_store_is_closed():
+    """A store shut on Shabbat must not be told to run a Shabbat promotion."""
+    from datetime import datetime, timedelta
+    rows = ["תאריך,מוצר,כמות"]
+    d = datetime(2026, 7, 1)
+    while d <= datetime(2026, 8, 31):
+        dow = (d.weekday() + 1) % 7
+        if dow != 6:                       # closed on Saturday
+            rows.append("%s,לחם,%d" % (d.strftime("%Y-%m-%d"), 40 if dow == 5 else 10))
+        d += timedelta(days=1)
+    sid = new_id()
+    tok = upload(sid, "\n".join(rows)).json["store_token"]
+    ideas = C.get("/promotions/" + sid, headers={"X-Store-Token": tok}).json["ideas"]
+    quiet = [i for i in ideas if i["kind"] == "quiet_day"]
+    assert quiet and quiet[0]["evidence"]["quiet_day"] != "שבת", ideas
+    # a store that does sell on Saturday may well be told to lift it
+    bakery = [i for i in C.get("/promotions/demo_bakery").json["ideas"] if i["kind"] == "quiet_day"]
+    assert bakery and bakery[0]["evidence"]["ratio"] > 1.5
+
+
+def test_promotions_holiday_idea_uses_measured_lift():
+    ideas = C.get("/promotions/demo_bakery").json["ideas"]
+    hol = [i for i in ideas if i["kind"] == "holiday"]
+    if hol:                                   # only when a holiday eve is near
+        assert hol[0]["evidence"]["lift"] > 1 and hol[0]["evidence"]["product"]
+
+
+def test_promotions_need_access():
+    sid = new_id()
+    upload(sid, daily_csv())
+    assert C.get("/promotions/" + sid).status_code == 403
+
+
 def test_nightly_runs_once_per_day():
     main.nightly_job()
     first = main.load_db()["meta"]["nightly_last"]
