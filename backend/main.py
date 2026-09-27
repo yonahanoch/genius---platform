@@ -143,6 +143,66 @@ db_lock = _DbLock
 _conn_state = threading.local()
 
 
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+BACKUP_KEEP = int(os.environ.get("GENIUS_BACKUP_KEEP", "7"))
+
+
+def backup_database(keep=None, day=None):
+    """
+    One snapshot of the database per day, kept beside it in backups/.
+
+    This protects against a corrupted file or a bad write. It does NOT
+    protect against losing the machine — the copies sit on the same disk.
+    Off-site safety is the store's own export (/store/<id>/export).
+
+    Returns the path written, or None when today's snapshot already exists.
+    """
+    keep = BACKUP_KEEP if keep is None else keep
+    if not os.path.exists(SQLITE_FILE):
+        return None
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = (day or datetime.now().date()).isoformat()
+    path = os.path.join(BACKUP_DIR, "genius-%s.db" % stamp)
+    if os.path.exists(path):
+        return None
+    part = path + ".part"
+    if os.path.exists(part):
+        os.remove(part)
+    # VACUUM INTO reads a consistent snapshot; writers are not blocked.
+    conn = sqlite3.connect(SQLITE_FILE, timeout=30)
+    try:
+        conn.execute("VACUUM INTO ?", (part,))
+    finally:
+        conn.close()
+    os.replace(part, path)
+    if keep > 0:
+        names = sorted(f for f in os.listdir(BACKUP_DIR)
+                       if f.startswith("genius-") and f.endswith(".db"))
+        for f in names[:-keep]:
+            try:
+                os.remove(os.path.join(BACKUP_DIR, f))
+            except OSError:
+                pass
+    return path
+
+
+def list_backups():
+    """Newest first, so the admin screen can show that backups really happen."""
+    if not os.path.isdir(BACKUP_DIR):
+        return []
+    out = []
+    for f in sorted(os.listdir(BACKUP_DIR), reverse=True):
+        if not (f.startswith("genius-") and f.endswith(".db")):
+            continue
+        p = os.path.join(BACKUP_DIR, f)
+        out.append({
+            "file": f,
+            "bytes": os.path.getsize(p),
+            "created": datetime.fromtimestamp(os.path.getmtime(p)).isoformat(timespec="seconds"),
+        })
+    return out
+
+
 def _connect():
     """One connection per thread, with write-ahead logging."""
     conn = getattr(_conn_state, "conn", None)
@@ -1188,6 +1248,27 @@ def admin_dashboard():
         }
     })
 
+@app.route("/admin/backups", methods=["GET", "POST"])
+def admin_backups():
+    """GET lists the snapshots on disk; POST makes today's now."""
+    err = require_admin()
+    if err:
+        return err
+    made = None
+    if request.method == "POST":
+        try:
+            made = backup_database()
+        except Exception as e:   # noqa: BLE001
+            return jsonify({"error": "backup failed", "detail": str(e)[:200]}), 500
+    return jsonify({
+        "backups": list_backups(),
+        "keep_days": BACKUP_KEEP,
+        "made_now": made,
+        "directory": BACKUP_DIR,
+        "note": "גיבוי יומי על אותו דיסק. מגן מפני קובץ פגום, לא מפני אובדן השרת.",
+    })
+
+
 @app.route("/admin/summary")
 def admin_summary():
     """Everything the admin screen shows — real numbers only."""
@@ -1479,6 +1560,11 @@ def nightly_job():
     Runs once per day even with several worker processes.
     """
     print(f"\n=== ניתוח לילי {datetime.now()} ===")
+    try:
+        made = backup_database()
+        print("  גיבוי נשמר: %s" % made if made else "  גיבוי של היום כבר קיים")
+    except Exception as e:   # a failed backup must never stop the analysis
+        print(f"  ! גיבוי נכשל: {e}")
     today = datetime.now().date().isoformat()
     outbox = []
     with db_lock():

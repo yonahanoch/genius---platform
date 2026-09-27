@@ -137,3 +137,33 @@ curl -X POST https://YOUR-REPL.repl.co/analyze \
 - [ ] שליפה אוטומטית מאימייל חשבשבת
 - [ ] דאשבורד ויזואלי (יש לך כבר את ה-HTML!)
 - [ ] WhatsApp Templates מאושרים ב-Meta
+
+---
+
+## גיבוי ושחזור
+
+הניתוח הלילי שומר **snapshot יומי אחד** של מסד הנתונים ב-`$GENIUS_DATA_DIR/backups/genius-YYYY-MM-DD.db`,
+ומוחק את הישנים מעבר ל-7 ימים (`GENIUS_BACKUP_KEEP` משנה את המספר).
+הגיבוי נעשה ב-`VACUUM INTO`, כלומר הוא קורא snapshot עקבי ולא חוסם כתיבות.
+
+לבדוק שזה באמת קורה:
+
+```
+curl -H "X-Admin-Token: $ADMIN_TOKEN" https://<host>/admin/backups
+curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://<host>/admin/backups   # ליצור עכשיו
+```
+
+לשחזר:
+
+```
+# 1. לעצור את השרת
+# 2. למחוק את קבצי ה-WAL, אחרת הם ידרסו את השחזור
+rm -f genius.db-wal genius.db-shm
+# 3. להעתיק את הגיבוי במקום הקובץ החי
+cp backups/genius-2026-09-27.db genius.db
+# 4. להפעיל מחדש
+```
+
+**מה הגיבוי הזה לא פותר:** הוא יושב על אותו דיסק. הוא מגן מפני קובץ פגום או כתיבה שגויה,
+לא מפני מחיקת השרת עצמו. להגנה מלאה צריך עותק מחוץ למכונה — הדרך החינמית היום היא
+`/store/<id>/export` לכל חנות, או הורדה ידנית של הקובץ מ-`backups/`.

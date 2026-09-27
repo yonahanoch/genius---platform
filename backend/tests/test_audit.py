@@ -1124,6 +1124,53 @@ def test_trends_reports_the_real_holiday_calendar_range():
         assert any(k.startswith(str(y)) for k in main.IL_HOLIDAYS), y
 
 
+def test_backup_is_a_real_readable_copy_of_the_data():
+    import datetime as _dt
+    import sqlite3 as _sq
+    sid, h = _store_with_reorder()
+    path = main.backup_database(day=_dt.date(2031, 1, 1))
+    assert path and os.path.exists(path), path
+    # the copy really contains that store, and opens as a database
+    con = _sq.connect(path)
+    try:
+        rows = con.execute("SELECT id FROM stores").fetchall()
+    finally:
+        con.close()
+    assert sid in [r[0] for r in rows]
+
+
+def test_backup_is_once_a_day_and_old_ones_are_pruned():
+    import datetime as _dt
+    import shutil as _sh
+    _sh.rmtree(main.BACKUP_DIR, ignore_errors=True)
+    for n in range(1, 11):
+        main.backup_database(keep=7, day=_dt.date(2030, 1, n))
+    kept = sorted(f["file"] for f in main.list_backups())
+    assert len(kept) == 7, kept
+    assert kept[0] == "genius-2030-01-04.db"       # the three oldest are gone
+    assert kept[-1] == "genius-2030-01-10.db"
+    # asking twice on the same day does not write a second copy
+    assert main.backup_database(keep=7, day=_dt.date(2030, 1, 10)) is None
+
+
+def test_backup_endpoint_needs_the_admin_token():
+    assert C.get("/admin/backups").status_code == 401
+    r = C.get("/admin/backups", headers=ADMIN)
+    assert r.status_code == 200 and isinstance(r.json["backups"], list)
+
+
+def test_a_failed_backup_does_not_stop_the_nightly_job():
+    real = main.backup_database
+    main.backup_database = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+    try:
+        main.load_db()["meta"].pop("nightly_last", None)
+        main.save_db(main.load_db())
+        main.nightly_job()                      # must not raise
+        assert main.load_db()["meta"].get("nightly_last")
+    finally:
+        main.backup_database = real
+
+
 def test_nightly_runs_once_per_day():
     main.nightly_job()
     first = main.load_db()["meta"]["nightly_last"]
