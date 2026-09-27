@@ -23,7 +23,9 @@ import hmac
 import shutil
 import secrets
 import hashlib
+import sqlite3
 import tempfile
+import collections.abc
 import threading
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template, redirect, g
@@ -58,7 +60,8 @@ STRIPE_PRICE_PRO   = os.environ.get("STRIPE_PRICE_PRO", "")    # price_xxx של 
 PUBLIC_URL     = os.environ.get("PUBLIC_URL", "").rstrip("/")  # used to verify Twilio signatures
 
 DATA_DIR = os.path.abspath(os.environ.get("GENIUS_DATA_DIR", os.getcwd()))
-DB_FILE = os.path.join(DATA_DIR, "genius_db.json")
+DB_FILE = os.path.join(DATA_DIR, "genius_db.json")   # legacy, migrated on startup
+SQLITE_FILE = os.path.join(DATA_DIR, "genius.db")
 DB_BACKUP = DB_FILE + ".bak"
 DB_LOCKFILE = DB_FILE + ".lock"
 ADMIN_TOKEN_FILE = os.path.join(DATA_DIR, ".admin_token")
@@ -99,12 +102,15 @@ def _load_admin_token():
 ADMIN_TOKEN = _load_admin_token()
 
 # ═══════════════════════════════════════
-# מסד נתונים (JSON) — כתיבה בטוחה: נעילה + כתיבה אטומית + גיבוי
+# מסד נתונים — SQLite, שורה לכל חנות
 # ═══════════════════════════════════════
-# Every request that may write holds DB_LOCK from start to finish, so two
-# requests can never load the same copy and overwrite each other. Writes go to
-# a temp file that replaces the real one in a single step, so a crash mid-write
-# can't leave a half-written database. The previous version is kept as .bak.
+# Each store is one row, so a request that touches one store reads and writes
+# only that row: adding customers doesn't slow anything down, and two writers
+# can't overwrite each other's work. SQLite handles the transaction; the lock
+# below still guards multi-step read-modify-write sections.
+# The code above still speaks the old dict shape ({"stores": {...}, ...}) —
+# "stores" is a lazy mapping that fetches a row on first access and writes back
+# only rows that actually changed.
 
 DB_LOCK = threading.RLock()
 _lock_state = threading.local()
@@ -134,51 +140,199 @@ class _DbLock:
 
 
 db_lock = _DbLock
+_conn_state = threading.local()
 
 
-def _empty_db():
-    return {"stores": {}, "suppliers": {}, "orders": [], "recommendations": []}
+def _connect():
+    """One connection per thread, with write-ahead logging."""
+    conn = getattr(_conn_state, "conn", None)
+    if conn is None:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        conn = sqlite3.connect(SQLITE_FILE, timeout=30, isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS stores (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS recommendations (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, store_id TEXT, json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, json TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS recs_by_store ON recommendations(store_id);
+        """)
+        _conn_state.conn = conn
+    return conn
+
+
+class _Stores(collections.abc.MutableMapping):
+    """The stores table, behaving like a dict but reading rows on demand."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._cache = {}        # id -> store dict
+        self._original = {}     # id -> json as read, to spot real changes
+        self._deleted = set()
+        self._all = False
+
+    # -- reading --
+    def _row(self, key):
+        r = self._conn.execute("SELECT json FROM stores WHERE id=?", (key,)).fetchone()
+        return None if r is None else r[0]
+
+    def __getitem__(self, key):
+        if key in self._cache:
+            return self._cache[key]
+        if key in self._deleted:
+            raise KeyError(key)
+        raw = self._row(key)
+        if raw is None:
+            raise KeyError(key)
+        store = json.loads(raw)
+        self._cache[key], self._original[key] = store, raw
+        return store
+
+    def __iter__(self):
+        self._load_all()
+        return iter([k for k in self._cache if k not in self._deleted])
+
+    def __len__(self):
+        self._load_all()
+        return len([k for k in self._cache if k not in self._deleted])
+
+    def _load_all(self):
+        if self._all:
+            return
+        for key, raw in self._conn.execute("SELECT id, json FROM stores"):
+            if key not in self._cache and key not in self._deleted:
+                self._cache[key], self._original[key] = json.loads(raw), raw
+        self._all = True
+
+    def ids(self):
+        """Store ids without loading their data."""
+        rows = [r[0] for r in self._conn.execute("SELECT id FROM stores")]
+        return [k for k in dict.fromkeys(rows + list(self._cache)) if k not in self._deleted]
+
+    # -- writing (kept in memory until save_db) --
+    def __setitem__(self, key, value):
+        self._cache[key] = value
+        self._deleted.discard(key)
+
+    def __delitem__(self, key):
+        self._cache.pop(key, None)
+        self._original.pop(key, None)
+        self._deleted.add(key)
+
+    def flush(self, conn):
+        for key in self._deleted:
+            conn.execute("DELETE FROM stores WHERE id=?", (key,))
+            conn.execute("DELETE FROM recommendations WHERE store_id=?", (key,))
+        for key, store in self._cache.items():
+            raw = json.dumps(store, ensure_ascii=False)
+            if self._original.get(key) != raw:
+                conn.execute("INSERT INTO stores (id, json) VALUES (?, ?) "
+                             "ON CONFLICT(id) DO UPDATE SET json=excluded.json", (key, raw))
+                self._original[key] = raw
+        self._deleted.clear()
+
+
+KV_LISTS = ("orders", "contact_consents")
+KV_DICTS = ("meta",)
+RECS_PER_STORE = 20        # older recommendations are pruned on save
+
+
+def _kv_get(conn, key, default):
+    r = conn.execute("SELECT json FROM kv WHERE key=?", (key,)).fetchone()
+    return default if r is None else json.loads(r[0])
 
 
 def load_db():
-    for path in (DB_FILE, DB_BACKUP):
-        if not os.path.exists(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                db = json.load(f)
-            for k, v in _empty_db().items():
-                db.setdefault(k, v)
-            if path == DB_BACKUP:
-                print("! main database unreadable — loaded the backup copy")
-            return db
-        except (ValueError, OSError) as e:
-            print(f"! could not read {path}: {e}")
-    return _empty_db()
+    """A dict-shaped view of the database. Store rows load on first access."""
+    conn = _connect()
+    db = {
+        "stores": _Stores(conn),
+        "suppliers": {r[0]: json.loads(r[1]) for r in conn.execute("SELECT id, json FROM suppliers")},
+        "recommendations": [json.loads(r[0]) for r in
+                            conn.execute("SELECT json FROM recommendations ORDER BY seq")],
+    }
+    for k in KV_LISTS:
+        db[k] = _kv_get(conn, k, [])
+    for k in KV_DICTS:
+        db[k] = _kv_get(conn, k, {})
+    return db
 
 
 def save_db(db):
+    """Writes what changed, in one transaction."""
+    conn = _connect()
     with db_lock():
-        os.makedirs(DATA_DIR, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=DATA_DIR, prefix=".genius_db.", suffix=".tmp")
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(db, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            if os.path.exists(DB_FILE):
-                shutil.copy2(DB_FILE, DB_BACKUP)
-            os.replace(tmp, DB_FILE)
+            stores = db.get("stores")
+            if isinstance(stores, _Stores):
+                stores.flush(conn)
+            elif isinstance(stores, dict):          # a plain dict (tests, seeding)
+                for key, store in stores.items():
+                    conn.execute("INSERT INTO stores (id, json) VALUES (?, ?) "
+                                 "ON CONFLICT(id) DO UPDATE SET json=excluded.json",
+                                 (key, json.dumps(store, ensure_ascii=False)))
+
+            recs = db.get("recommendations")
+            if recs is not None:
+                keep, per_store = [], {}
+                for rec in reversed(recs):          # newest first while counting
+                    sid = rec.get("store_id")
+                    per_store[sid] = per_store.get(sid, 0) + 1
+                    if per_store[sid] <= RECS_PER_STORE:
+                        keep.append(rec)
+                keep.reverse()
+                conn.execute("DELETE FROM recommendations")
+                conn.executemany("INSERT INTO recommendations (store_id, json) VALUES (?, ?)",
+                                 [(r.get("store_id"), json.dumps(r, ensure_ascii=False)) for r in keep])
+
+            sup = db.get("suppliers")
+            if sup is not None:
+                conn.execute("DELETE FROM suppliers")
+                conn.executemany("INSERT INTO suppliers (id, json) VALUES (?, ?)",
+                                 [(k, json.dumps(v, ensure_ascii=False)) for k, v in sup.items()])
+
+            for k in KV_LISTS + KV_DICTS:
+                if k in db:
+                    conn.execute("INSERT INTO kv (key, json) VALUES (?, ?) "
+                                 "ON CONFLICT(key) DO UPDATE SET json=excluded.json",
+                                 (k, json.dumps(db[k], ensure_ascii=False)))
+            conn.execute("COMMIT")
         except Exception:
-            if os.path.exists(tmp):
-                os.remove(tmp)
+            conn.execute("ROLLBACK")
             raise
+
+
+def migrate_json_to_sqlite():
+    """One-off: move an existing genius_db.json into the database."""
+    if not os.path.exists(DB_FILE):
+        return
+    conn = _connect()
+    if conn.execute("SELECT COUNT(*) FROM stores").fetchone()[0]:
+        return                                   # already migrated
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            old = json.load(f)
+    except (ValueError, OSError) as e:
+        print(f"! could not read {DB_FILE} for migration: {e}")
+        return
+    db = load_db()
+    for sid, store in (old.get("stores") or {}).items():
+        db["stores"][sid] = store
+    db["suppliers"] = old.get("suppliers") or {}
+    db["recommendations"] = old.get("recommendations") or []
+    db["orders"] = old.get("orders") or []
+    save_db(db)
+    os.replace(DB_FILE, DB_FILE + ".migrated")
+    print(f"✓ migrated {len(old.get('stores') or {})} stores from genius_db.json to SQLite")
 
 
 # The lock is taken only around load -> modify -> save, never while a request
 # body is still arriving or while an outside service (Twilio, Stripe, Claude)
-# is being called — so one slow client can't stall everyone else. Readers
-# don't need it: os.replace swaps the file in one step.
+# is being called — so one slow client can't stall everyone else.
 
 
 # ═══════════════════════════════════════
@@ -3333,6 +3487,7 @@ def list_stores():
 # refresh demo stores once at startup (idempotent; real stores untouched)
 try:
     with db_lock():
+        migrate_json_to_sqlite()
         _db = load_db()
         ensure_demo(_db)
         save_db(_db)

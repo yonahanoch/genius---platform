@@ -256,24 +256,61 @@ def test_concurrent_imports_lose_nothing():
     [t.start() for t in th]
     [t.join() for t in th]
     assert all(v == 200 for v in results.values()), results
-    with open(main.DB_FILE, encoding="utf-8") as f:
-        db = json.load(f)
-    assert all(i in db["stores"] for i in ids)
+    stored = main.load_db()["stores"]
+    assert all(i in stored for i in ids)
 
 
-def test_corrupt_db_falls_back_to_backup():
+def test_two_writers_on_different_stores_do_not_clobber():
+    """Row-level storage: saving store A must not roll back store B."""
+    a, b = new_id(), new_id()
+    ta = upload(a, daily_csv()).json["store_token"]
+    tb = upload(b, daily_csv()).json["store_token"]
+    va = main.load_db()      # both readers hold their own view
+    vb = main.load_db()
+    va["stores"][a]["name"] = "שם א"
+    vb["stores"][b]["name"] = "שם ב"
+    main.save_db(va)
+    main.save_db(vb)
+    fresh = main.load_db()["stores"]
+    assert fresh[a]["name"] == "שם א" and fresh[b]["name"] == "שם ב"
+    assert fresh[a]["sales_csv"] and fresh[b]["sales_csv"]
+    assert ta and tb
+
+
+def test_store_row_is_read_only_when_touched():
+    """A request for one store must not load every other store's sales."""
     sid = new_id()
     upload(sid, daily_csv())
-    upload(new_id(), daily_csv())  # second save -> backup holds the first state
-    good = open(main.DB_FILE, encoding="utf-8").read()
-    with open(main.DB_FILE, "w") as f:
-        f.write("{broken")
-    try:
-        assert C.get("/stores").status_code == 200
-        assert sid in main.load_db()["stores"]
-    finally:
-        with open(main.DB_FILE, "w", encoding="utf-8") as f:
-            f.write(good)
+    db = main.load_db()
+    db["stores"][sid]
+    assert list(db["stores"]._cache) == [sid]
+
+
+def test_migration_from_the_old_json_file():
+    import subprocess, tempfile as tf, textwrap
+    d = tf.mkdtemp(prefix="genius_migrate_")
+    old = {"stores": {"store_old_000001": {"name": "חנות ישנה", "sales_csv": "date,product,qty\n2026-06-01,x,1"}},
+           "suppliers": {"0521111111": {"name": "תנובה", "phone": "0521111111", "store_ids": []}},
+           "recommendations": [{"store_id": "store_old_000001", "created": "2026-06-02", "analysis": {"summary_he": "ישן"}}]}
+    with open(os.path.join(d, "genius_db.json"), "w", encoding="utf-8") as f:
+        json.dump(old, f, ensure_ascii=False)
+    code = textwrap.dedent("""
+        import os, sys, json
+        sys.path.insert(0, %r)
+        import main
+        db = main.load_db()
+        print(json.dumps({"name": db["stores"]["store_old_000001"]["name"],
+                          "sup": list(db["suppliers"]),
+                          "recs": len([r for r in db["recommendations"] if r["store_id"] == "store_old_000001"]),
+                          "moved": os.path.exists(os.path.join(%r, "genius_db.json.migrated"))},
+                         ensure_ascii=False))
+    """ % (os.path.dirname(HERE), d))
+    env = dict(os.environ, GENIUS_DATA_DIR=d)
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=120)
+    line = [l for l in out.stdout.splitlines() if l.startswith("{")][-1]
+    got = json.loads(line)
+    assert got["name"] == "חנות ישנה" and got["sup"] == ["0521111111"]
+    assert got["recs"] == 1 and got["moved"] is True, got   # demo stores are seeded alongside
 
 
 def test_demo_delete_removes_bakery_too():

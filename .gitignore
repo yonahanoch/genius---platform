@@ -5,3 +5,7 @@ genius_db.json.bak
 genius_db.json.lock
 .genius_db.*.tmp
 .admin_token
+genius.db
+genius.db-wal
+genius.db-shm
+genius_db.json.migrated
