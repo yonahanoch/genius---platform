@@ -2206,7 +2206,7 @@ function switchRole(role) {
     const nav = document.getElementById('nav-'+r);
     if (nav) nav.style.display = r === role ? '' : 'none';
   });
-  const logos = { store: gxStoreName() || 'Genius', admin: 'פאנל מנהל (הדגמה)', supplier: 'ספק (הדגמה)' };
+  const logos = { store: gxStoreName() || 'Genius', admin: 'פאנל מנהל', supplier: 'ספק (הדגמה)' };
   const sp = document.getElementById('store-picker'); if (sp) sp.style.display = role === 'store' && __gxStores.length ? '' : 'none';
   document.getElementById('logo-role').textContent = logos[role] || '';
   const first = { store:'overview', admin:'dashboard', supplier:'sup-dashboard' };
