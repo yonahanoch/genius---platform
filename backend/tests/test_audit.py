@@ -790,6 +790,11 @@ def test_holiday_calendar_known_dates():
     assert main.holiday_of("2027-05-12") == ("chag", "יום העצמאות")
     assert main.holiday_of("2026-12-05")[0] == "period"                 # Hanukkah
     assert main.holiday_of("2026-09-15") is None
+    # the table reaches far enough ahead to be useful (checked against a
+    # published calendar: Pesach 18/4/2030, Independence Day 15/4/2032)
+    assert main.holiday_of("2030-04-18") == ("chag", "פסח")
+    assert main.holiday_of("2032-04-15") == ("chag", "יום העצמאות")
+    assert max(main.IL_HOLIDAYS) >= "2032-01-01"
 
 
 def _holiday_store(boost_product="מוצר א", boost=5):

@@ -52,6 +52,15 @@
 - **מסד הנתונים** הוא SQLite (`genius.db`): שורה לכל חנות, כך שבקשה לחנות אחת קוראת וכותבת רק אותה, ושני כותבים לא דורסים זה את זה. קובץ `genius_db.json` ישן מיובא אוטומטית בהפעלה הראשונה ומקבל סיומת `.migrated`.
 - **גיבוי**: להעתיק את `genius.db` (עדיף עם `sqlite3 genius.db ".backup גיבוי.db"` כדי לתפוס גם כתיבות שבאוויר). הקבצים `genius.db-wal` ו-`genius.db-shm` נוצרים לצד המסד וזה תקין.
 
+## לוח החגים
+לוח החגים (ימי חג, ערבי חג וחול המועד) מוטמע ב-`backend/main.py` ומכסה 2024–2032.
+להארכה:
+```bash
+pip install pyluach
+python3 tools/generate_holidays.py 2024 2040 > /tmp/holidays.py
+# להחליף את בלוק IL_HOLIDAYS ב-backend/main.py, ולבדוק כמה תאריכים מול לוח שנה מפורסם
+```
+
 ## בדיקות
 ```bash
 cd backend && python3 tests/test_audit.py
