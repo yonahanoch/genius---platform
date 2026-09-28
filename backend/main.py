@@ -1908,18 +1908,32 @@ def forecast_product(history, current_stock, lead_time_days=3):
         daily_rate = total_qty / 30
     else:
         daily_rate = 0.0
+    # Split the history by the middle DATE, not by the middle row. Splitting
+    # by row count called three sales in January plus one in December
+    # "rising" and multiplied the reorder quantity by 1.25. /trends always
+    # split by date; this function, the one that sets order quantities,
+    # did not.
     trend = "stable"
-    if len(dated) >= 4:
+    observed_days = len({d.date() if hasattr(d, "date") else d for d, _ in dated})
+    if len(dated) >= 4 and observed_days >= 4:
         ordered = sorted(dated, key=lambda x: x[0])
-        mid = len(ordered) // 2
-        first = sum(q for _, q in ordered[:mid])
-        second = sum(q for _, q in ordered[mid:])
-        if first > 0:
-            change = (second - first) / first
-            if change > 0.20:
-                trend = "rising"
-            elif change < -0.20:
-                trend = "falling"
+        first_day, last_day = ordered[0][0], ordered[-1][0]
+        mid_day = first_day + (last_day - first_day) / 2
+        early = [(d, q) for d, q in ordered if d <= mid_day]
+        late = [(d, q) for d, q in ordered if d > mid_day]
+        early_days = len({d.date() if hasattr(d, "date") else d for d, _ in early})
+        late_days = len({d.date() if hasattr(d, "date") else d for d, _ in late})
+        # Compare per-day rates, and only when BOTH halves have more than one
+        # day behind them — a single day on one side is not a direction.
+        if early_days >= 2 and late_days >= 2:
+            first = sum(q for _, q in early) / early_days
+            second = sum(q for _, q in late) / late_days
+            if first > 0:
+                change = (second - first) / first
+                if change > 0.20:
+                    trend = "rising"
+                elif change < -0.20:
+                    trend = "falling"
     adjusted_rate = daily_rate
     if trend == "rising":
         adjusted_rate = daily_rate * 1.25
@@ -1937,13 +1951,24 @@ def forecast_product(history, current_stock, lead_time_days=3):
         reorder_now = days_until_empty <= lead_time_days + 2
         needed = adjusted_rate * (14 + lead_time_days)
         order_quantity = max(0, int(round(needed - current_stock)))
-    if len(dated) >= 10:
+    # Confidence needs days of evidence spread over time, not rows. Two rows
+    # on two consecutive days used to count as "medium" and still produced a
+    # hard "order 750 units" instruction.
+    span = 0
+    if dated:
+        ds = [d for d, _ in dated]
+        span = (max(ds) - min(ds)).days + 1
+    if observed_days >= 10 and span >= 14:
         confidence = "high"
-    elif len(dated) >= 4 or total_qty > 0:
+    elif observed_days >= 4 and span >= 7:
         confidence = "medium"
     else:
         confidence = "low"
-    return {"daily_rate": round(daily_rate, 2), "adjusted_daily_rate": round(adjusted_rate, 2), "days_until_empty": days_until_empty, "reorder_now": reorder_now, "order_quantity": order_quantity, "trend": trend, "confidence": confidence, "data_points": len(history), "stock_known": current_stock is not None}
+    return {"daily_rate": round(daily_rate, 2), "adjusted_daily_rate": round(adjusted_rate, 2),
+            "days_until_empty": days_until_empty, "reorder_now": reorder_now,
+            "order_quantity": order_quantity, "trend": trend, "confidence": confidence,
+            "data_points": len(history), "observed_days": observed_days, "span_days": span,
+            "stock_known": current_stock is not None}
 
 
 def _stock_lookup(stock_map):
@@ -3445,22 +3470,28 @@ def trends(store_id):
             by_date_prod.setdefault(k, {})
             by_date_prod[k][name] = by_date_prod[k].get(name, 0) + q
     # typical ordinary day for the same weekday (holidays move around the week)
-    wd_avg = {}
+    wd_avg, wd_n = {}, {}
     for i in range(7):
         vals = [by_date_rev[d] for d in normal_days if _he_dow(d) == i]
         wd_avg[i] = (sum(vals) / len(vals)) if vals else None
+        wd_n[i] = len(vals)
+    # A "typical Sunday" built from one Sunday is not a baseline. Claims that
+    # rest on a single ordinary day are not made at all.
+    MIN_BASELINE_DAYS = 2
     prod_wd_avg = {}
     for name in sales:
         for i in range(7):
             vals = [by_date_prod.get(d, {}).get(name, 0) for d in normal_days if _he_dow(d) == i]
             prod_wd_avg[(name, i)] = (sum(vals) / len(vals)) if vals else None
     holiday_effects = []
+    thin_baselines = 0
     for d in open_days:
         h = holiday_of(d)
         if not h or h[0] not in ("erev", "chag"):
             continue
         base_day = wd_avg.get(_he_dow(d))
-        if not base_day:
+        if not base_day or wd_n.get(_he_dow(d), 0) < MIN_BASELINE_DAYS:
+            thin_baselines += 1
             continue
         lift = by_date_rev[d] / base_day
         best, best_lift = None, 0
@@ -3473,6 +3504,7 @@ def trends(store_id):
         holiday_effects.append({
             "date": d.strftime("%Y-%m-%d"), "kind": h[0], "name": h[1],
             "weekday": HE_DAYS[_he_dow(d)], "lift": round(lift, 1),
+            "baseline_days": wd_n.get(_he_dow(d), 0),
             "top_product": best, "top_product_lift": round(best_lift, 1) if best else None,
         })
     closed_holidays = [
@@ -3487,16 +3519,23 @@ def trends(store_id):
         same = [e for e in holiday_effects if e["name"] == u["name"]]
         if same:
             u["last_time"] = same[-1]
-        elif u["kind"] == "erev" and eve_lifts:
+        elif u["kind"] == "erev" and len(eve_lifts) >= 2:
             u["typical_eve_lift"] = round(sum(eve_lifts) / len(eve_lifts), 1)
+            u["eve_lift_n"] = len(eve_lifts)
+            u["eve_lift_low"] = round(min(eve_lifts), 1)
+            u["eve_lift_high"] = round(max(eve_lifts), 1)
 
     # ---- one honest headline ----
     insight = None
-    if busiest and quietest and busiest["avg_revenue"] > 0:
+    if (busiest and quietest and busiest["avg_revenue"] > 0
+            and busiest.get("observed_days", 0) >= MIN_BASELINE_DAYS
+            and quietest.get("observed_days", 0) >= MIN_BASELINE_DAYS):
         ratio = busiest["avg_revenue"] / max(1, quietest["avg_revenue"])
         if ratio >= 1.5:
-            insight = ("יום %s חזק פי %.1f מיום %s. כדאי להיערך במלאי ובכוח אדם."
-                       % (busiest["day"], ratio, quietest["day"]))
+            insight = ("יום %s חזק פי %.1f מיום %s (לפי %d ו-%d ימים בנתונים). "
+                       "כדאי להיערך במלאי ובכוח אדם."
+                       % (busiest["day"], ratio, quietest["day"],
+                          busiest["observed_days"], quietest["observed_days"]))
     concentrated = [m for m in movers if m["peak_share_pct"] >= 35]
     if concentrated:
         top = max(concentrated, key=lambda m: m["peak_share_pct"])
@@ -3512,8 +3551,11 @@ def trends(store_id):
             if lt.get("top_product"):
                 head += " (%s — פי %.1f)" % (lt["top_product"], lt["top_product_lift"])
         elif soon.get("typical_eve_lift"):
-            head = "%s %s. בערבי חג בנתונים שלך נמכר בממוצע פי %.1f מיום רגיל" % (
-                soon["name"], when, soon["typical_eve_lift"])
+            head = "%s %s. ב-%d ערבי החג שיש בנתונים שלך נמכר פי %.1f בממוצע מיום רגיל" % (
+                soon["name"], when, soon["eve_lift_n"], soon["typical_eve_lift"])
+            if soon["eve_lift_low"] != soon["eve_lift_high"]:
+                head += " (בין פי %.1f לפי %.1f — כלומר זה משתנה מחג לחג)" % (
+                    soon["eve_lift_low"], soon["eve_lift_high"])
         else:
             head = "%s %s. אין עדיין ערב חג בנתונים שלך להשוואה" % (soon["name"], when)
         head += " — כדאי להגדיל הזמנות מראש."
@@ -3521,8 +3563,9 @@ def trends(store_id):
     big = [e for e in holiday_effects if e["lift"] >= 1.5]
     if big:
         e = max(big, key=lambda x: x["lift"])
-        extra = "ב%s (%s) נמכר פי %.1f מיום %s רגיל" % (e["name"], e["date"][8:10] + "/" + e["date"][5:7],
-                                                      e["lift"], e["weekday"])
+        extra = "ב%s (%s) נמכר פי %.1f מ-%d ימי %s רגילים" % (
+            e["name"], e["date"][8:10] + "/" + e["date"][5:7],
+            e["lift"], e.get("baseline_days", 0), e["weekday"])
         if e["top_product"]:
             extra += "; %s — פי %.1f" % (e["top_product"], e["top_product_lift"])
         extra += "."
@@ -3624,14 +3667,20 @@ def production_plan(store, target_date, weeks=PRODUCTION_WEEKS):
             holiday_basis = "closed"
 
         expected = avg_dow * trend * holiday_factor
-        low = max(0, expected - spread * trend * holiday_factor)
-        high = expected + spread * trend * holiday_factor
+        if len(obs) > 1:
+            low = max(0, expected - spread * trend * holiday_factor)
+            high = expected + spread * trend * holiday_factor
+        else:
+            # One observation says nothing about spread. A range of 50–50 reads
+            # as certainty, which is the opposite of the truth, so there is no
+            # range at all until there is something to measure it from.
+            low = high = None
         conf = "high" if len(obs) >= 6 else ("medium" if len(obs) >= 3 else "low")
         rows.append({
             "product": name,
             "suggested": int(round(expected)),
-            "range_low": int(round(low)),
-            "range_high": int(round(high)),
+            "range_low": int(round(low)) if low is not None else None,
+            "range_high": int(round(high)) if high is not None else None,
             "weekday_avg": round(avg_dow, 1),
             "trend_factor": round(trend, 2),
             "holiday_factor": round(holiday_factor, 2) if hol else None,
@@ -3781,6 +3830,12 @@ def compose_weekly_report(db, store_id, today=None):
     if hot:
         lines.append("")
         lines.append("⚠️ להזמין: " + ", ".join("%s (%s יח')" % (p.get("name"), p.get("order_quantity")) for p in hot[:3]))
+        # never send a bare quantity that rests on a couple of days of sales
+        thin = [p for p in hot[:3] if p.get("confidence") == "low"]
+        if thin:
+            lines.append("   (%s — %s. זו הערכה ראשונית, כדאי להזמין בזהירות)"
+                         % (thin[0].get("name"),
+                            thin[0].get("basis_he") or "מעט ימי מכירה"))
     if dead:
         worst = dead[0]
         stuck = analysis.get("stuck_value") or 0
@@ -4455,6 +4510,18 @@ def _read_upload():
     return request.get_data(cache=False) or b""
 
 
+def _basis_he(observed_days, span_days):
+    """One short Hebrew phrase saying what a number is actually built on."""
+    if not observed_days:
+        return "אין מספיק נתונים"
+    days = "יום מכירה אחד" if observed_days == 1 else "%d ימי מכירה" % observed_days
+    if span_days and span_days >= 7:
+        weeks = span_days / 7.0
+        over = "לאורך שבוע" if weeks < 2 else "לאורך %d שבועות" % int(weeks)
+        return "לפי %s %s" % (days, over)
+    return "לפי %s בלבד — עוד מוקדם להסתמך על זה" % days
+
+
 def build_rule_analysis(store):
     """
     A recommendation built from plain rules, so a newly connected store gets
@@ -4507,6 +4574,13 @@ def build_rule_analysis(store):
                 "stock": f["current_stock"],
                 "days_until_empty": f["days_until_empty"],
                 "order_quantity": f["order_quantity"],
+                # How much evidence is behind the number. The overview and the
+                # WhatsApp report used to print "order 750 units" with none of
+                # this, so two days of sales looked like a settled fact.
+                "confidence": f["confidence"],
+                "observed_days": f["observed_days"],
+                "span_days": f["span_days"],
+                "basis_he": _basis_he(f["observed_days"], f["span_days"]),
             })
 
     stuck = sum((d["stock"] or 0) * (d["current_price"] or 0) for d in dead)

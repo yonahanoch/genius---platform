@@ -1124,6 +1124,88 @@ def test_trends_reports_the_real_holiday_calendar_range():
         assert any(k.startswith(str(y)) for k in main.IL_HOLIDAYS), y
 
 
+def test_two_days_of_sales_is_not_a_confident_forecast():
+    from datetime import datetime as _dt
+    hist = [(_dt(2026, 9, 1), 50), (_dt(2026, 9, 2), 50)]
+    f = main.forecast_product(hist, 100)
+    assert f["confidence"] == "low", f
+    assert f["observed_days"] == 2 and f["span_days"] == 2, f
+
+
+def test_confidence_needs_days_spread_over_time_not_just_rows():
+    from datetime import datetime as _dt
+    # ten sales all on one day is not ten days of evidence
+    same_day = [(_dt(2026, 9, 1), 5)] * 10
+    assert main.forecast_product(same_day, 100)["confidence"] == "low"
+    # ten different days across three weeks is
+    from datetime import timedelta as _td
+    spread = [(_dt(2026, 9, 1) + _td(days=2 * i), 5) for i in range(10)]
+    assert main.forecast_product(spread, 100)["confidence"] == "high"
+
+
+def test_a_trend_is_measured_over_time_not_over_row_positions():
+    from datetime import datetime as _dt
+    # three small sales in January, one in December: splitting by row count
+    # called this "rising" and inflated the reorder quantity by 25%
+    lopsided = [(_dt(2026, 1, 1), 10), (_dt(2026, 1, 2), 10),
+                (_dt(2026, 1, 3), 10), (_dt(2026, 12, 1), 31)]
+    f = main.forecast_product(lopsided, 100)
+    assert f["trend"] == "stable", f
+    assert f["adjusted_daily_rate"] == f["daily_rate"], f
+
+
+def test_a_thin_reorder_says_what_it_rests_on():
+    sid = new_id()
+    rows = ["תאריך,מוצר,כמות", "2026-09-01,קולה,50", "2026-09-02,קולה,50"]
+    tok = upload(sid, "\n".join(rows)).json["store_token"]
+    h = {"X-Store-Token": tok}
+    with main.db_lock():
+        db = main.load_db()
+        db["stores"][sid]["stock"] = {"קולה": 10}
+        main._save_rule_analysis(db, sid)
+        main.save_db(db)
+    hot = C.get("/store/%s" % sid, headers=h).json["hot_products"]
+    assert hot, "expected a reorder suggestion"
+    p = hot[0]
+    assert p["confidence"] == "low", p
+    assert p["observed_days"] == 2 and p["basis_he"], p
+    rep = C.get("/report/%s" % sid, headers=h).json.get("text", "")
+    assert "להזמין" in rep and ("הערכה ראשונית" in rep or "עוד מוקדם" in rep), rep
+
+
+def test_no_holiday_lift_claim_from_a_single_ordinary_day():
+    """A "typical Sunday" built from one Sunday is not a baseline."""
+    from datetime import datetime as _dt
+    rows = ["תאריך,מוצר,כמות,מחיר"]
+    # one ordinary Sunday, plus a holiday eve that also falls on a Sunday
+    for day, qty in [(_dt(2026, 9, 13), 10), (_dt(2026, 9, 20), 40)]:
+        rows.append("%s,חלה,%d,10" % (day.strftime("%Y-%m-%d"), qty))
+    from datetime import timedelta as _td
+    for i in range(20):                      # other weekdays, so trends runs
+        d = _dt(2026, 8, 3) + _td(days=i)
+        if d.weekday() != 6:
+            rows.append("%s,לחם,10,5" % d.strftime("%Y-%m-%d"))
+    sid = new_id()
+    tok = upload(sid, "\n".join(rows)).json["store_token"]
+    body = C.get("/trends/%s" % sid, headers={"X-Store-Token": tok}).json
+    for e in body.get("holiday_effects") or []:
+        assert e["baseline_days"] >= 2, e
+    ins = body.get("insight") or ""
+    assert "פי 4.0 מ-1 ימי" not in ins, ins
+
+
+def test_production_shows_no_range_from_a_single_measurement():
+    from datetime import datetime as _dt
+    rows = ["תאריך,מוצר,כמות,מחיר", "%s,קולה,50,7" % _dt(2026, 9, 7).strftime("%Y-%m-%d")]
+    sid = new_id()
+    tok = upload(sid, "\n".join(rows)).json["store_token"]
+    body = C.get("/production/%s?date=2026-09-14" % sid,
+                 headers={"X-Store-Token": tok}).json
+    for p in body.get("products") or []:
+        if p["observations"] <= 1:
+            assert p["range_low"] is None and p["range_high"] is None, p
+
+
 def _order_to_supplier(phone="050-1234567"):
     """A store with one real open order to the supplier at `phone`."""
     sid, h = _store_with_reorder()

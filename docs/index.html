@@ -1036,7 +1036,11 @@ function gxToast(msg, bad) {
 }
 
 function gxMoney(n) { return '₪' + Number(n || 0).toLocaleString('he-IL'); }
-function gxNum(n) { return Number(n || 0).toLocaleString('he-IL'); }
+// null/undefined means the server does not know — never render that as 0.
+function gxNum(n, unknown) {
+  if (n == null || n === '' || Number.isNaN(Number(n))) return unknown == null ? '—' : unknown;
+  return Number(n).toLocaleString('he-IL');
+}
 function gxIsMine(id) { return !!gxTokenFor(id); }
 function gxNetQs() {
   const id = gxStore();
@@ -1249,7 +1253,9 @@ async function loadProduction(date) {
     '<th style="width:20%">רגיל ביום הזה</th><th style="width:16%">בסיס</th></tr></thead><tbody>' +
     rows.map(r => '<tr><td>' + gxEsc(r.product) + '</td>' +
       '<td><strong>' + gxEsc(r.suggested) + "</strong> יח'</td>" +
-      '<td>' + gxEsc(r.range_low) + '–' + gxEsc(r.range_high) + '</td>' +
+      '<td>' + (r.range_low == null || r.range_high == null
+        ? '<span class="muted">אין טווח — מדידה אחת</span>'
+        : gxEsc(r.range_low) + '–' + gxEsc(r.range_high)) + '</td>' +
       '<td>' + gxEsc(r.weekday_avg) + " יח'" +
         (r.trend_factor !== 1 ? ' · מגמה ×' + gxEsc(r.trend_factor) : '') +
         (r.holiday_factor && r.holiday_factor !== 1 ? ' · ערב חג ×' + gxEsc(r.holiday_factor) : '') + '</td>' +
@@ -1938,7 +1944,11 @@ async function loadOverview() {
     rows.push('<div class="ai-row"><div class="aico g"><i class="ti ti-trending-up"></i></div>' +
       '<div style="flex:1"><div class="at">' + gxEsc(p.name) + ' — נגמר בעוד ' + gxEsc(p.days_until_empty) + ' ימים</div>' +
         '<div class="ad">~' + gxNum(p.weekly_sales) + " יח' בשבוע, " + gxNum(p.stock) + " במלאי. הזמן " +
-          gxNum(p.order_quantity) + " יח'" + (p.supplier ? ' מ' + gxEsc(p.supplier) : '') + '</div></div>' +
+          gxNum(p.order_quantity) + " יח'" + (p.supplier ? ' מ' + gxEsc(p.supplier) : '') + '</div>' +
+        // a quantity means nothing without what it was computed from
+        (p.basis_he ? '<div class="net-sub" style="font-size:11px;margin-top:2px">' +
+          (p.confidence === 'low' ? '⚠️ ' : '') + gxEsc(p.basis_he) + '</div>' : '') +
+        '</div>' +
       '<div style="flex-shrink:0"><button class="btn" onclick="show(\'forecast\')">תחזית</button></div></div>');
   });
   const src = d.analysis_source === 'rules'
