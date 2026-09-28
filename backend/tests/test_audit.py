@@ -1124,6 +1124,121 @@ def test_trends_reports_the_real_holiday_calendar_range():
         assert any(k.startswith(str(y)) for k in main.IL_HOLIDAYS), y
 
 
+def _order_to_supplier(phone="050-1234567"):
+    """A store with one real open order to the supplier at `phone`."""
+    sid, h = _store_with_reorder()
+    sup = C.post("/suppliers/%s" % sid,
+                 json={"name": "ספק", "phone": phone, "products": ["חלב"]},
+                 headers=h).json["supplier_id"]
+    C.post("/orders/%s/send" % sid, json={"supplier_id": sup}, headers=h)
+    return sid, h, sup
+
+
+def test_supplier_code_shows_only_the_store_that_issued_it():
+    """
+    The whole attack, end to end: a stranger claims someone else's supplier
+    phone, gets a portal code for it, and must still see nothing of theirs.
+    """
+    victim, vh, sup = _order_to_supplier("050-7654321")
+    assert len(C.get("/supplier/%s/orders" % sup,
+                     headers={"X-Supplier-Token": C.post(
+                         "/suppliers/%s/%s/portal-code" % (victim, sup),
+                         headers=vh).json["supplier_token"]}).json["orders"]) == 1
+
+    # the attacker: its own store, same supplier phone, its own portal code
+    att, ah = _store_with_reorder()
+    same = C.post("/suppliers/%s" % att,
+                  json={"name": "אני", "phone": "050-7654321", "products": ["חלב"]},
+                  headers=ah).json["supplier_id"]
+    assert same == sup, "the record really is shared by phone number"
+    atok = C.post("/suppliers/%s/%s/portal-code" % (att, sup),
+                  headers=ah).json["supplier_token"]
+
+    seen = C.get("/supplier/%s/orders" % sup,
+                 headers={"X-Supplier-Token": atok}).json["orders"]
+    assert all(o["store_id"] == att for o in seen), \
+        "attacker saw another store's orders: %r" % [o["store_id"] for o in seen]
+
+
+def test_a_stranger_cannot_quote_on_someone_elses_order():
+    victim, vh, sup = _order_to_supplier("050-7654322")
+    order = C.get("/suppliers/%s" % victim, headers=vh).json["orders"][0]["id"]
+    att, ah = _store_with_reorder()
+    C.post("/suppliers/%s" % att,
+           json={"name": "אני", "phone": "050-7654322", "products": ["חלב"]}, headers=ah)
+    atok = C.post("/suppliers/%s/%s/portal-code" % (att, sup),
+                  headers=ah).json["supplier_token"]
+    r = C.post("/supplier/%s/orders/%s/quote" % (sup, order),
+               json={"price_per_unit": 999}, headers={"X-Supplier-Token": atok})
+    assert r.status_code == 404, r.status_code
+    assert C.get("/suppliers/%s" % victim, headers=vh).json["orders"][0]["quote"] is None
+
+
+def test_issuing_a_code_does_not_revoke_another_stores_code():
+    a, ah, sup = _order_to_supplier("050-7654323")
+    atok = C.post("/suppliers/%s/%s/portal-code" % (a, sup), headers=ah).json["supplier_token"]
+    b, bh = _store_with_reorder()
+    C.post("/suppliers/%s" % b, json={"name": "ספק", "phone": "050-7654323",
+                                      "products": ["חלב"]}, headers=bh)
+    C.post("/suppliers/%s/%s/portal-code" % (b, sup), headers=bh)
+    assert C.get("/supplier/%s/orders" % sup,
+                 headers={"X-Supplier-Token": atok}).status_code == 200
+
+
+def test_one_stores_orders_cannot_evict_another_stores():
+    quiet, qh, sup = _order_to_supplier("050-7654324")
+    assert len(C.get("/suppliers/%s" % quiet, headers=qh).json["orders"]) == 1
+    with main.db_lock():
+        db = main.load_db()
+        for _ in range(250):
+            main.record_order(db, "store_noisy_shop_1", {"supplier_id": sup, "items": []})
+        main.save_db(db)
+    assert len(C.get("/suppliers/%s" % quiet, headers=qh).json["orders"]) == 1, \
+        "a busy store deleted a quiet store's order"
+
+
+def test_subscribe_does_not_reveal_which_stores_exist():
+    """Store ids are phone numbers — this route must not confirm one."""
+    sid, h = _store_with_reorder()
+    mine = C.get("/subscribe/%s/basic" % sid)                 # no token
+    missing = C.get("/subscribe/%s/basic" % new_id())         # no such store
+    assert mine.status_code == missing.status_code, (mine.status_code, missing.status_code)
+    assert mine.get_data() == missing.get_data()
+
+
+def test_forwarded_for_cannot_be_used_to_reset_the_rate_limit():
+    assert main.PROXY_HOPS == 0, "X-Forwarded-For must not be trusted by default"
+    with main.app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"}):
+        assert main.client_ip() != "1.2.3.4"
+
+
+def test_restored_json_backup_is_migrated_even_after_demo_stores_exist():
+    """
+    Boot once with no legacy file (demo stores get seeded), then drop a
+    genius_db.json in and boot again — the operator's restore after a redeploy.
+    The store in that file must come back.
+    """
+    import subprocess, tempfile, shutil, json as _json
+    d = tempfile.mkdtemp(prefix="gx_mig_")
+    try:
+        env = dict(os.environ, GENIUS_DATA_DIR=d, ADMIN_TOKEN="t")
+        boot = [sys.executable, "-c",
+                "import sys;sys.path.insert(0,%r);import main;"
+                "print('STORES', sorted(main.load_db()['stores'].keys()))"
+                % os.path.dirname(main.__file__)]
+        first = subprocess.run(boot, env=env, capture_output=True, text=True, timeout=120)
+        assert "demo_bakery" in first.stdout, first.stdout + first.stderr
+
+        with open(os.path.join(d, "genius_db.json"), "w", encoding="utf-8") as f:
+            _json.dump({"stores": {"0521111111": {"name": "חנות ששוחזרה", "active": True}}}, f)
+
+        second = subprocess.run(boot, env=env, capture_output=True, text=True, timeout=120)
+        assert "0521111111" in second.stdout, \
+            "a restored backup was ignored:\n" + second.stdout + second.stderr
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_backup_is_a_real_readable_copy_of_the_data():
     import datetime as _dt
     import sqlite3 as _sq

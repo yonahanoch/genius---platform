@@ -25,6 +25,7 @@ import secrets
 import hashlib
 import sqlite3
 import tempfile
+import ipaddress
 import collections.abc
 import threading
 from datetime import datetime, timedelta
@@ -371,7 +372,14 @@ def migrate_json_to_sqlite():
     if not os.path.exists(DB_FILE):
         return
     conn = _connect()
-    if conn.execute("SELECT COUNT(*) FROM stores").fetchone()[0]:
+    # Count only REAL stores. Startup seeds four demo stores on every boot, so
+    # counting all rows meant migration could only ever run on the very first
+    # boot. After that, restoring a genius_db.json backup — exactly what an
+    # operator does after a redeploy or a lost volume — was ignored in silence
+    # and every real store stayed missing.
+    real = conn.execute(
+        "SELECT COUNT(*) FROM stores WHERE id NOT LIKE 'demo_%'").fetchone()[0]
+    if real:
         return                                   # already migrated
     try:
         with open(DB_FILE, "r", encoding="utf-8") as f:
@@ -490,14 +498,29 @@ _RATE_LOCK = threading.Lock()
 # real client address is the entry the proxy APPENDS to X-Forwarded-For. A
 # client can put anything at the front of that header, so only the entry added
 # by our own proxy (PROXY_HOPS from the right) is trusted.
-PROXY_HOPS = int(os.environ.get("PROXY_HOPS", "1"))
+#
+# The default is 0 — X-Forwarded-For is NOT trusted unless the operator says
+# how many proxies really sit in front. It used to default to 1, so an app
+# served directly (which is how `python backend/main.py` runs) believed a
+# header anyone could set, and every per-IP limit came off with one line:
+#     curl -H 'X-Forwarded-For: 1.2.3.4' ...
+# Set PROXY_HOPS=1 on Replit and behind any single reverse proxy.
+PROXY_HOPS = int(os.environ.get("PROXY_HOPS", "0"))
 
 
 def client_ip():
     if PROXY_HOPS > 0:
         parts = [p.strip() for p in request.headers.get("X-Forwarded-For", "").split(",") if p.strip()]
+        # Exactly the entry our own proxy appended. Fewer entries than hops
+        # means the header did not come through that proxy, so it is a forgery
+        # and the socket address is the only thing left worth believing.
         if len(parts) >= PROXY_HOPS:
-            return parts[-PROXY_HOPS]
+            candidate = parts[-PROXY_HOPS]
+            try:
+                ipaddress.ip_address(candidate)
+                return candidate
+            except ValueError:
+                pass
     return request.remote_addr or "?"
 
 
@@ -1131,6 +1154,17 @@ def subscribe(store_id, plan):
     """יוצר לינק תשלום Stripe לחנות"""
     if plan not in ("basic", "pro"):
         return jsonify({"error": "תוכנית לא מוכרת"}), 400
+
+    # Authorize BEFORE anything that depends on configuration. Store ids are
+    # phone numbers: this route used to answer 302 for a real store and 404
+    # for a missing one, with no token at all, so the 05X range could be
+    # walked to map the paying customers — and each probe opened a real
+    # Stripe Checkout session. Same answer now for missing and not-yours,
+    # exactly like every other /<store_id> route.
+    store = load_db()["stores"].get(store_id)
+    if not store or store.get("demo") or not can_write(store):
+        return deny()
+
     if not STRIPE_KEY:
         return jsonify({"error": "תשלומים עדיין לא מופעלים"}), 503
     price_id = STRIPE_PRICE_BASIC if plan == "basic" else STRIPE_PRICE_PRO
@@ -1139,11 +1173,6 @@ def subscribe(store_id, plan):
 
     import stripe
     stripe.api_key = STRIPE_KEY
-
-    db = load_db()
-    store = db["stores"].get(store_id)
-    if not store or store.get("demo"):
-        return jsonify({"error": "חנות לא נמצאה"}), 404
 
     # creating a checkout page changes nothing — the store becomes "paid" only
     # when Stripe's signed webhook confirms the payment
@@ -1229,6 +1258,11 @@ def _public_store(s):
     return {k: v for k, v in s.items() if k not in ("token_hash", "sales_csv")}
 
 
+def _public_supplier(s):
+    """Supplier record without the portal-code hashes."""
+    return {k: v for k, v in s.items() if k not in ("token_hash", "token_hashes")}
+
+
 @app.route("/admin")
 def admin_dashboard():
     """דאשבורד פשוט למנהל — JSON לעכשיו"""
@@ -1238,7 +1272,7 @@ def admin_dashboard():
     db = load_db()
     return jsonify({
         "stores": {k: _public_store(s) for k, s in db["stores"].items()},
-        "suppliers": db["suppliers"],
+        "suppliers": {k: _public_supplier(s) for k, s in db["suppliers"].items()},
         "recommendations": db["recommendations"][-20:],  # 20 אחרונות
         "stats": {
             "total_stores": len(db["stores"]),
@@ -4183,14 +4217,33 @@ ORDER_STATES = ("open", "quoted", "accepted", "declined")
 
 
 def _supplier_access(db, supplier_id):
+    """
+    (supplier, store_ids this code may act for) — or None.
+
+    A supplier record is keyed by phone number, so every store that lists the
+    same phone shares one record. The portal code is therefore issued PER
+    STORE and authorizes only the store that issued it. It used to be one
+    code per supplier, which meant anyone who claimed a supplier's phone
+    number could read and answer every other store's orders to that supplier.
+    """
     sup = (db.get("suppliers") or {}).get(supplier_id)
     if not sup:
         return None
+    store_ids = list(sup.get("store_ids") or [])
     if is_admin():
-        return sup
-    want = sup.get("token_hash")
+        return sup, store_ids
     tok = request.headers.get("X-Supplier-Token", "")
-    return sup if (want and tok and hmac.compare_digest(_hash_token(tok), want)) else None
+    if not tok:
+        return None
+    given = _hash_token(tok)
+    allowed = [sid for sid, h in (sup.get("token_hashes") or {}).items()
+               if h and hmac.compare_digest(given, h) and sid in store_ids]
+    # a code issued before codes were per store still works while the supplier
+    # serves exactly one store, where there is nothing for it to leak into
+    legacy = sup.get("token_hash")
+    if not allowed and legacy and len(store_ids) == 1 and hmac.compare_digest(given, legacy):
+        allowed = store_ids
+    return (sup, allowed) if allowed else None
 
 
 def record_order(db, store_id, draft):
@@ -4206,7 +4259,16 @@ def record_order(db, store_id, draft):
     }
     orders = db.setdefault("orders", [])
     orders.append(order)
-    del orders[:-200]                      # keep the last 200 network-wide
+    # Keep the last 200 PER STORE. A single network-wide cap let one busy
+    # store silently delete a quiet store's open orders and their quotes.
+    kept, seen = [], {}
+    for o in reversed(orders):
+        sid = o.get("store_id")
+        seen[sid] = seen.get(sid, 0) + 1
+        if seen[sid] <= 200:
+            kept.append(o)
+    kept.reverse()
+    orders[:] = kept
     return order
 
 
@@ -4222,18 +4284,24 @@ def supplier_portal_code(store_id, supplier_id):
         if not sup or store_id not in (sup.get("store_ids") or []):
             return jsonify({"error": "supplier not found"}), 404
         token = secrets.token_urlsafe(18)
-        sup["token_hash"] = _hash_token(token)
+        # only this store's code — re-issuing must never revoke or replace
+        # the code another store gave the same supplier
+        sup.setdefault("token_hashes", {})[store_id] = _hash_token(token)
+        sup.pop("token_hash", None)
         save_db(db)
-    return jsonify({"supplier_id": supplier_id, "supplier_token": token})
+    return jsonify({"supplier_id": supplier_id, "supplier_token": token,
+                    "scope": "מציג רק את ההזמנות של החנות הזו"})
 
 
 @app.route("/supplier/<supplier_id>/orders", methods=["GET"])
 def supplier_orders(supplier_id):
     db = load_db()
-    sup = _supplier_access(db, supplier_id)
-    if not sup:
+    access = _supplier_access(db, supplier_id)
+    if not access:
         return deny("קוד הספק לא תקין", 403)
-    orders = [o for o in (db.get("orders") or []) if o.get("supplier_id") == supplier_id]
+    sup, allowed = access
+    orders = [o for o in (db.get("orders") or [])
+              if o.get("supplier_id") == supplier_id and o.get("store_id") in allowed]
     orders.sort(key=lambda o: o.get("created", ""), reverse=True)
     return jsonify({"supplier_id": supplier_id, "supplier_name": sup.get("name"),
                     "orders": orders[:50]})
@@ -4249,11 +4317,13 @@ def supplier_quote(supplier_id, order_id):
         return jsonify({"error": "צריך מחיר ליחידה"}), 400
     with db_lock():
         db = load_db()
-        sup = _supplier_access(db, supplier_id)
-        if not sup:
+        access = _supplier_access(db, supplier_id)
+        if not access:
             return deny("קוד הספק לא תקין", 403)
+        _sup, allowed = access
         order = next((o for o in (db.get("orders") or [])
-                      if o.get("id") == order_id and o.get("supplier_id") == supplier_id), None)
+                      if o.get("id") == order_id and o.get("supplier_id") == supplier_id
+                      and o.get("store_id") in allowed), None)
         if not order:
             return jsonify({"error": "order not found"}), 404
         if order["status"] in ("accepted", "declined"):
