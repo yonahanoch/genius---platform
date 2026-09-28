@@ -1124,6 +1124,40 @@ def test_trends_reports_the_real_holiday_calendar_range():
         assert any(k.startswith(str(y)) for k in main.IL_HOLIDAYS), y
 
 
+def test_a_failed_lock_does_not_deadlock_every_later_writer():
+    """
+    Taking the OS file lock can fail (full disk, read-only mount). It used to
+    raise with the thread lock already held and no __exit__ coming, so every
+    writer in the process blocked for ever.
+    """
+    import builtins
+    real_open = builtins.open
+
+    def boom(path, *a, **k):
+        if str(path) == main.DB_LOCKFILE:
+            raise OSError("No space left on device")
+        return real_open(path, *a, **k)
+
+    builtins.open = boom
+    try:
+        with main.db_lock():
+            raise AssertionError("expected the lock to fail")
+    except OSError:
+        pass
+    finally:
+        builtins.open = real_open
+
+    done = []
+    t = threading.Thread(target=lambda: (main.db_lock().__enter__(),
+                                         done.append(True),
+                                         main._lock_state.__setattr__("depth", 0),
+                                         main.DB_LOCK.release()))
+    t.daemon = True
+    t.start()
+    t.join(timeout=5)
+    assert done, "the lock was never released — later writers would hang"
+
+
 def test_dates_are_israeli_business_dates_not_utc():
     """
     The holiday feature turns on "what day is it in Israel". On a UTC clock,

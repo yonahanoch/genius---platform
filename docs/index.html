@@ -1290,7 +1290,7 @@ async function loadPromotions() {
     return;
   }
   const icons = { markdown: 'ti-tag', bundle: 'ti-gift', quiet_day: 'ti-calendar', holiday: 'ti-candle' };
-  box.innerHTML = d.ideas.map((i, idx) =>
+  box.innerHTML = (d.ideas || []).map((i, idx) =>
     '<div class="net-card"><div class="net-row" style="align-items:flex-start">' +
       '<div style="flex:1"><div class="net-title"><i class="ti ' + (icons[i.kind] || 'ti-bulb') +
         '" style="font-size:16px;vertical-align:-2px" aria-hidden="true"></i> ' + gxEsc(i.title) + '</div>' +
@@ -1423,7 +1423,7 @@ async function loadSuppliers() {
   const prodOptions = (names, chosen) => (names || []).map(n =>
     '<option value="' + gxEsc(n) + '"' + ((chosen || []).indexOf(n) >= 0 ? ' selected' : '') + '>' + gxEsc(n) + '</option>').join('');
 
-  const list = d.suppliers.length ? d.suppliers.map((sp, i) =>
+  const list = (d.suppliers || []).length ? d.suppliers.map((sp, i) =>
     '<div class="net-card"><div class="net-title">' + gxEsc(sp.name) + '</div>' +
       '<div class="net-sub" dir="ltr" style="text-align:right">' + gxEsc(sp.phone) + '</div>' +
       '<div class="net-sub" style="margin-top:6px">מוצרים: ' +
@@ -1443,7 +1443,7 @@ async function loadSuppliers() {
     '<div class="net-row" style="margin-top:10px"><button class="btn btnp" onclick="gxSupSave()">שמור ספק</button>' +
       '<span id="sup-status" role="status" style="font-size:12px;color:var(--text2)"></span></div></div>';
 
-  const drafts = d.drafts.length ? d.drafts.map((dr, i) =>
+  const drafts = (d.drafts || []).length ? d.drafts.map((dr, i) =>
     '<div class="net-card"><div class="net-title">הזמנה ל' + gxEsc(dr.supplier_name) + '</div>' +
       '<pre style="white-space:pre-wrap;font-family:var(--font);font-size:13px;margin:8px 0 0;line-height:1.7">' + gxEsc(dr.text) + '</pre>' +
       '<div class="net-row" style="margin-top:10px">' +
@@ -1454,7 +1454,7 @@ async function loadSuppliers() {
 
   const statusTxt = { open: 'ממתין להצעת מחיר', quoted: 'התקבלה הצעה', accepted: 'אושר', declined: 'נדחה' };
   const orders = (d.orders || []).length
-    ? '<div class="sec" style="margin:18px 0 12px">הזמנות שנשלחו</div>' + d.orders.map((o, i) => {
+    ? '<div class="sec" style="margin:18px 0 12px">הזמנות שנשלחו</div>' + (d.orders || []).map((o, i) => {
         const q = o.quote
           ? 'הצעת הספק: ₪' + gxEsc(o.quote.price_per_unit) + ' ליח׳ · סה"כ ₪' + gxEsc(o.quote.total) +
             (o.quote.note ? ' · ' + gxEsc(o.quote.note) : '')
@@ -1462,7 +1462,7 @@ async function loadSuppliers() {
         const actions = o.status === 'quoted'
           ? '<div class="net-row"><button class="btn btnp" onclick="gxAnswerOrder(\'' + gxEsc(o.id) + '\',\'accepted\')">אשר</button>' +
             '<button class="btn" onclick="gxAnswerOrder(\'' + gxEsc(o.id) + '\',\'declined\')">דחה</button></div>' : '';
-        const sup = (d.suppliers.find(x => x.supplier_id === o.supplier_id) || {}).name || o.supplier_id;
+        const sup = ((d.suppliers || []).find(x => x.supplier_id === o.supplier_id) || {}).name || o.supplier_id;
         return '<div class="net-card"><div class="net-row" style="align-items:flex-start">' +
           '<div style="flex:1"><div class="net-title">' + gxEsc(sup) + ' · ' + gxEsc((o.created || '').slice(0,10)) + '</div>' +
           '<div class="net-sub">' + o.items.map(it => gxEsc(it.name) + ' ' + gxEsc(it.quantity) + " יח'").join(' · ') + '</div>' +
@@ -1472,16 +1472,16 @@ async function loadSuppliers() {
       }).join('')
     : '';
 
-  const unassigned = d.unassigned.length
+  const unassigned = (d.unassigned || []).length
     ? '<div class="net-card"><div class="net-title">צריך להזמין, בלי ספק משויך</div>' +
-      '<div class="net-sub">' + d.unassigned.map(u => gxEsc(u.name) + " (" + gxEsc(u.quantity) + " יח')").join(' · ') + '</div>' +
+      '<div class="net-sub">' + (d.unassigned || []).map(u => gxEsc(u.name) + " (" + gxEsc(u.quantity) + " יח')").join(' · ') + '</div>' +
       '<div class="net-sub" style="margin-top:6px;font-size:11px">הוסף ספק ובחר את המוצרים האלה כדי לקבל טיוטת הזמנה.</div></div>'
     : '';
   const channel = d.can_send ? '' :
     '<div class="net-card" style="border-color:var(--amber)"><div class="net-sub" style="color:var(--amber)">' +
       gxEsc(d.reason || '') + '. אפשר להעתיק את ההזמנה ולשלוח בעצמך.</div></div>';
   const queued = (d.queued || []).length
-    ? '<div class="net-card"><div class="net-sub">' + gxEsc(d.queued.length) + ' הזמנות ממתינות לשליחה אוטומטית.</div></div>' : '';
+    ? '<div class="net-card"><div class="net-sub">' + gxEsc((d.queued || []).length) + ' הזמנות ממתינות לשליחה אוטומטית.</div></div>' : '';
 
   box.innerHTML = channel +
     '<div class="sec" style="margin:4px 0 12px">טיוטות הזמנה</div>' + drafts + unassigned + queued + orders +
@@ -1601,7 +1601,7 @@ async function loadAdmin(which) {
 }
 
 function gxAdminDashboard(box) {
-  const d = __gxAdmin, st = d.stats, ch = d.channels;
+  const d = __gxAdmin || {}, st = d.stats || {}, ch = d.channels || {};
   const card = (label, value, sub) => '<div class="mc"><div class="ml">' + label + '</div><div class="mv">' +
     gxEsc(value) + '</div><div class="ms">' + gxEsc(sub || '') + '</div></div>';
   const chRow = (label, on, offTxt) => '<div class="setting-row"><div><div class="setting-label">' + label + '</div>' +
@@ -1609,7 +1609,7 @@ function gxAdminDashboard(box) {
     '<span class="pill ' + (on ? 'g' : 'a') + '"><span class="dot"></span>' + (on ? 'פעיל' : 'לא מחובר') + '</span></div>';
   box.innerHTML =
     '<div class="metrics">' +
-      card('חנויות אמיתיות', st.real_stores, st.with_data + ' עם נתונים') +
+      card('חנויות אמיתיות', gxNum(st.real_stores), gxNum(st.with_data) + ' עם נתונים') +
       card('משלמות', st.paying, st.trial + ' בתקופת ניסיון') +
       card('פג תוקף', st.expired, 'ניסיון שהסתיים בלי תשלום') +
       card('נתונים ישנים', st.stale_data, 'לא עודכנו מעל 14 יום') +
@@ -1619,7 +1619,7 @@ function gxAdminDashboard(box) {
     chRow('תשלומים (Stripe)', ch.payments, 'צריך מפתח ו-Webhook חתום') +
     chRow('צ׳אט AI', ch.ai_chat, 'חסר מפתח') +
     '<div class="sec" style="margin-top:20px">התראות מכל החנויות</div>' +
-    (d.alerts.length ? d.alerts.slice(0, 8).map(gxAlertRow).join('')
+    ((d.alerts || []).length ? d.alerts.slice(0, 8).map(gxAlertRow).join('')
       : '<div class="net-card"><div class="net-sub">אין התראות פתוחות.</div></div>') +
     '<div class="net-sub" style="margin-top:12px;font-size:11px">כל המספרים מחושבים מהנתונים שבשרת · עודכן ' +
       gxEsc((d.generated_at || '').slice(11, 16)) + '</div>';
@@ -1633,7 +1633,7 @@ function gxAlertRow(a) {
 
 function gxAdminAlerts(box) {
   const d = __gxAdmin;
-  box.innerHTML = d.alerts.length
+  box.innerHTML = (d.alerts || []).length
     ? d.alerts.map(gxAlertRow).join('')
     : '<div class="net-card"><div class="net-sub">אין התראות פתוחות בשום חנות.</div></div>';
 }
@@ -1705,7 +1705,7 @@ async function loadReport() {
     ? '<span class="tag g">מוכן לשליחה ב-WhatsApp</span>'
     : '<span class="tag a">' + gxEsc(d.reason || 'לא ניתן לשלוח כרגע') + '</span>';
   const queued = (d.queued || []).length
-    ? '<div class="net-card"><div class="net-title">דוחות שממתינים לשליחה (' + gxEsc(d.queued.length) + ')</div>' +
+    ? '<div class="net-card"><div class="net-title">דוחות שממתינים לשליחה (' + gxEsc((d.queued || []).length) + ')</div>' +
       '<div class="net-sub">נשמרו עד שה-WhatsApp יחובר. אפשר להעתיק אותם ולשלוח ידנית.</div>' +
       '<div class="net-row"><button class="btn" onclick="gxClearQueue()">נקה את התור</button></div></div>'
     : '';

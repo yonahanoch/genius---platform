@@ -137,10 +137,24 @@ class _DbLock:
     def __enter__(self):
         DB_LOCK.acquire()
         depth = getattr(_lock_state, "depth", 0)
-        if depth == 0 and fcntl is not None:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            _lock_state.fh = open(DB_LOCKFILE, "a")
-            fcntl.flock(_lock_state.fh, fcntl.LOCK_EX)
+        try:
+            if depth == 0 and fcntl is not None:
+                os.makedirs(DATA_DIR, exist_ok=True)
+                _lock_state.fh = open(DB_LOCKFILE, "a")
+                fcntl.flock(_lock_state.fh, fcntl.LOCK_EX)
+        except Exception:
+            # A full disk or a read-only mount used to raise here with DB_LOCK
+            # already held and no __exit__ to come, deadlocking every writer
+            # in the process for good. Give the lock back before propagating.
+            fh = getattr(_lock_state, "fh", None)
+            if fh:
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+                _lock_state.fh = None
+            DB_LOCK.release()
+            raise
         _lock_state.depth = depth + 1
         return self
 
