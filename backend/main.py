@@ -29,6 +29,20 @@ import ipaddress
 import collections.abc
 import threading
 from datetime import datetime, timedelta
+
+# Every date this product shows is an Israeli business date: which weekday a
+# sale fell on, whether today is a holiday eve, what "tomorrow" means in the
+# production plan. The server clock is UTC, so between 21:00 and midnight
+# Israel time the site said "erev Pesach TOMORROW" when it was already erev
+# Pesach, and "how much to prepare tomorrow" planned for today. Pinning the
+# process timezone fixes all of it in one place, instead of leaving dozens of
+# naive datetime.now() calls each free to be wrong.
+os.environ.setdefault("TZ", "Asia/Jerusalem")
+try:
+    time.tzset()
+except AttributeError:            # pragma: no cover - Windows dev machines
+    pass
+
 from flask import Flask, request, jsonify, render_template, redirect, g
 from flask_cors import CORS
 import anthropic
@@ -2026,6 +2040,10 @@ def _lead_time(raw, default=3):
 @app.route("/forecast/<store_id>", methods=["POST"])
 def forecast_endpoint(store_id):
     """Stateless: forecasts the CSV sent in the request. Stores nothing."""
+    # Stateless does not mean free: a 2.4MB upload came back as 28MB of JSON,
+    # with no token and no limit in front of it.
+    if rate_limited("forecast", 30, 3600):
+        return jsonify({"error": "יותר מדי בקשות — נסה שוב בעוד שעה"}), 429
     data = request.get_json(silent=True) or {}
     csv_text = data.get("csv", "")
     stock_map = data.get("stock") or {}
@@ -2309,6 +2327,8 @@ def notify_group_buying():
 @app.route("/lending/<store_id>", methods=["POST"])
 def lending_endpoint(store_id):
     """Stateless: scores the CSV sent in the request. Stores nothing."""
+    if rate_limited("lending", 30, 3600):
+        return jsonify({"error": "יותר מדי בקשות — נסה שוב בעוד שעה"}), 429
     data = request.get_json(silent=True) or {}
     csv_text = data.get("csv", "")
     price_map = data.get("prices") or {}
@@ -3314,6 +3334,18 @@ def holiday_calendar_years():
     return years[0] + "-" + years[-1]
 
 
+def holiday_calendar_until():
+    """The last date in the table. After it every holiday looks ordinary."""
+    return max(IL_HOLIDAYS)
+
+
+def holiday_calendar_expiring(today=None, within_days=365):
+    """True when the table runs out within a year — time to regenerate it."""
+    today = today or datetime.now().date()
+    last = datetime.strptime(holiday_calendar_until(), "%Y-%m-%d").date()
+    return (last - today).days <= within_days
+
+
 def holiday_of(d):
     """(kind, name) for a date/datetime, or None on an ordinary day."""
     key = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
@@ -3589,6 +3621,7 @@ def trends(store_id):
         "closed_on_holidays": closed_holidays,
         "upcoming_holidays": upcoming,
         "holiday_calendar_years": holiday_calendar_years(),
+        "holiday_calendar_until": holiday_calendar_until(),
         "not_enough_weeks": len(weekly_series) < 2,
         "partial_weeks_dropped": partial_dropped,
     })
@@ -3799,10 +3832,18 @@ def compose_weekly_report(db, store_id, today=None):
 
     lines = ["📊 דוח שבועי — %s" % store.get("name"),
              "%s–%s" % (this_from.strftime("%d/%m"), this_to.strftime("%d/%m")), ""]
-    if prev_rate > 0:
+    # Comparing the same weekdays is right, but two single days are still two
+    # data points: one sale each week produced a confident "+300%".
+    MIN_COMPARABLE_DAYS = 3
+    comparable = min(cmp_this_days, cmp_prev_days)
+    if prev_rate > 0 and comparable >= MIN_COMPARABLE_DAYS:
         change = (this_rate - prev_rate) / prev_rate * 100
         arrow = "↑" if change > 1 else ("↓" if change < -1 else "→")
         lines.append("מכירות השבוע: %s (%s %.0f%% מהשבוע שלפני)" % (money(this_total), arrow, abs(change)))
+    elif prev_rate > 0:
+        lines.append("מכירות השבוע: %s" % money(this_total))
+        lines.append("  (רק %d %s משותפים לשני השבועות — מעט מדי להשוואה אמינה)"
+                     % (comparable, "יום" if comparable == 1 else "ימים"))
     else:
         lines.append("מכירות השבוע: %s" % money(this_total))
     if hol_names:
@@ -3811,7 +3852,8 @@ def compose_weekly_report(db, store_id, today=None):
         lines.append("הנתונים האחרונים שהעלית הם מ-%s." % last.strftime("%d/%m"))
 
     movers = []
-    for name in set(cmp_this_prod) | set(cmp_prev_prod):
+    # same floor as the headline: no per-product "+300%" off two single days
+    for name in (set(cmp_this_prod) | set(cmp_prev_prod)) if comparable >= MIN_COMPARABLE_DAYS else ():
         # per ordinary day in each week, for the same reason as the total above
         a = (cmp_prev_prod.get(name, 0) / cmp_prev_days) if cmp_prev_days else 0
         b = (cmp_this_prod.get(name, 0) / cmp_this_days) if cmp_this_days else 0
@@ -4633,6 +4675,12 @@ def import_csv(store_id):
     comma/semicolon/tab separated). ?preview=1 inspects without saving.
     Optional columns: unit price, or line total (price = total / qty).
     """
+    # A preview parses the whole upload before any store check, so it was free
+    # CPU for anyone who asked. Meter the anonymous case only — a caller who
+    # already holds a store's key is a known customer, not the abuse path.
+    known = has_store_access(load_db()["stores"].get(store_id) or {})
+    if not known and rate_limited("import_parse", 60, 3600):
+        return jsonify({"error": "יותר מדי קבצים — נסה שוב בעוד שעה"}), 429
     raw = _read_upload()
     if not raw:
         return jsonify({"error": "no file received"}), 400
@@ -4755,5 +4803,11 @@ if __name__ == "__main__":
     print(f"Twilio: {'✓' if TWILIO_SID else '✗ חסר (מצב דמו)'}")
     print(f"Stripe: {'✓' if STRIPE_KEY else '✗ חסר'}")
     print(f"Admin token: {'from ADMIN_TOKEN' if os.environ.get('ADMIN_TOKEN') else ADMIN_TOKEN_FILE}")
+    print(f"שעון: {datetime.now():%Y-%m-%d %H:%M} ({os.environ.get('TZ')})")
+    print(f"לוח חגים: {holiday_calendar_years()} (עד {holiday_calendar_until()})")
+    if holiday_calendar_expiring():
+        print("  ⚠️  לוח החגים נגמר בתוך פחות משנה — להריץ tools/generate_holidays.py")
+    if PROXY_HOPS == 0:
+        print("  ℹ️  PROXY_HOPS=0 — X-Forwarded-For לא נסמך. מאחורי פרוקסי (Replit) להגדיר 1")
     print("=" * 50)
     app.run(host="0.0.0.0", port=8080)

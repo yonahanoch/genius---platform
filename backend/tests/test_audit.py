@@ -1124,6 +1124,37 @@ def test_trends_reports_the_real_holiday_calendar_range():
         assert any(k.startswith(str(y)) for k in main.IL_HOLIDAYS), y
 
 
+def test_dates_are_israeli_business_dates_not_utc():
+    """
+    The holiday feature turns on "what day is it in Israel". On a UTC clock,
+    the three hours before midnight local belong to the previous date, so the
+    site announced a holiday eve as "tomorrow" when it had already started.
+    """
+    import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        return
+    il = _dt.datetime.now(ZoneInfo("Asia/Jerusalem"))
+    here = _dt.datetime.now()
+    assert here.date() == il.date(), (here.isoformat(), il.isoformat())
+    assert abs((here.hour * 60 + here.minute) - (il.hour * 60 + il.minute)) <= 1
+
+
+def test_the_holiday_calendar_warns_before_it_runs_out():
+    """Past the last generated year every holiday silently becomes an ordinary
+    day. The server must at least be able to say when that happens."""
+    from datetime import datetime as _dt, timedelta as _td
+    last = max(main.IL_HOLIDAYS)
+    assert main.holiday_of(last) is not None
+    after = (_dt.strptime(last, "%Y-%m-%d") + _td(days=400)).date()
+    assert main.holiday_of(after) is None
+    assert main.holiday_calendar_years().endswith(last[:4])
+    # and the API says where the table ends, so this cannot expire unnoticed
+    body = C.get("/trends/demo_bakery").json
+    assert body["holiday_calendar_until"] == last, body.get("holiday_calendar_until")
+
+
 def test_two_days_of_sales_is_not_a_confident_forecast():
     from datetime import datetime as _dt
     hist = [(_dt(2026, 9, 1), 50), (_dt(2026, 9, 2), 50)]
