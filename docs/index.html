@@ -985,12 +985,20 @@ async function gxFetch(path, opts) {
   return { ok: res.ok, status: res.status, data };
 }
 
-function gxMsgCard(title, sub, retry) {
+function gxMsgCard(title, sub, retry, action) {
   return '<div class="net-card"><div class="net-title">' + gxEsc(title) + '</div>' +
     (sub ? '<div class="net-sub">' + gxEsc(sub) + '</div>' : '') +
-    (retry ? '<div class="net-row"><button class="btn btnp" onclick="' + retry + '()">נסה שוב</button></div>' : '') +
+    (retry || action
+      ? '<div class="net-row">' +
+        (action ? '<button class="btn btnp" onclick="' + action.fn + '">' + gxEsc(action.label) + '</button>' : '') +
+        (retry ? '<button class="btn" onclick="' + retry + '()">נסה שוב</button>' : '') +
+        '</div>'
+      : '') +
     '</div>';
 }
+// A store with no sales file yet: say it once, the same way everywhere,
+// and give the owner the button instead of the name of a screen to hunt for.
+const GX_UPLOAD_ACTION = { label: 'העלה קובץ מכירות', fn: "show('connect')" };
 function gxErr(box, retry, r) {
   if (r && r.status === 403) {
     box.innerHTML = gxMsgCard('אין גישה לחנות הזו',
@@ -998,7 +1006,9 @@ function gxErr(box, retry, r) {
   } else if (r && r.status === 402) {
     box.innerHTML = gxMsgCard('המנוי לא פעיל', r.data.error || 'כדי להמשיך — הפעל מנוי.');
   } else if (r && r.status === 404 && r.data && /no .*sales/.test(r.data.error || '')) {
-    box.innerHTML = gxMsgCard('אין עדיין נתוני מכירות', 'העלה קובץ מכירות במסך "חיבור נתונים".');
+    box.innerHTML = gxMsgCard('אין עדיין נתוני מכירות',
+      'המסך הזה מחושב מהמכירות שלך, אז הוא יתמלא ברגע שיהיה קובץ ראשון.',
+      null, GX_UPLOAD_ACTION);
   } else {
     box.innerHTML = gxMsgCard('אין חיבור לשרת', 'לא הצלחנו לטעון נתונים כרגע.', retry);
   }
@@ -1879,7 +1889,9 @@ async function loadOverview() {
   if (d.active === false) banners.push(gxMsgCard('תקופת הניסיון הסתיימה', 'כדי להמשיך לקבל ניתוחים — פנה אלינו להפעלת מנוי.'));
   if (!d.has_analysis) {
     box.innerHTML = banners.join('') + gxMsgCard('עוד אין ניתוח לחנות',
-      'העלה קובץ מכירות במסך "חיבור נתונים" — הניתוח מוכן מיד.');
+      'קובץ מכירות אחד מספיק כדי להתחיל — הניתוח מוכן מיד אחריו. ' +
+      'עד אז אין מה להראות כאן, ולא נציג מספרים שלא חושבו מהנתונים שלך.',
+      null, GX_UPLOAD_ACTION);
     return;
   }
   if (!d.stock_known) banners.push('<div class="net-card" style="border-color:var(--amber)"><div class="net-sub">' +
