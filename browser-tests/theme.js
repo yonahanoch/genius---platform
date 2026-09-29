@@ -118,6 +118,36 @@ const contrast = (a, b) => {
   await pg.waitForTimeout(2000);
   chk('and it is still the one in use after loading', await pg.evaluate(() => gxTheme()) === 'ivory');
 
+  // the default: a first-time visitor sees ivory, and a deliberate "night" sticks
+  {
+    const fresh = await (await b.newContext({ viewport: { width: 1360, height: 900 } })).newPage();
+    await fresh.goto('http://127.0.0.1:8000/index.html', { waitUntil: 'domcontentloaded' });
+    const d = await fresh.evaluate(() => ({
+      attr: document.documentElement.getAttribute('data-theme'),
+      saved: localStorage.getItem('gx_theme'),
+      bg: getComputedStyle(document.body).backgroundColor,
+      chrome: document.getElementById('gx-theme-color').getAttribute('content'),
+    }));
+    chk('a first-time visitor gets ivory', d.attr === 'ivory' && d.saved === null, JSON.stringify(d));
+    chk('the default background is the ivory paper colour', d.bg === 'rgb(247, 244, 239)', d.bg);
+    chk('the phone chrome matches the ivory default', d.chrome.toLowerCase() === '#f7f4ef', d.chrome);
+    await fresh.waitForTimeout(1500);
+    chk('gxTheme() reports ivory when nothing is saved', await fresh.evaluate(() => gxTheme()) === 'ivory');
+    await fresh.evaluate(() => gxSetTheme('night'));
+    await fresh.reload({ waitUntil: 'domcontentloaded' });
+    const n = await fresh.evaluate(() => ({
+      attr: document.documentElement.getAttribute('data-theme'),
+      bg: getComputedStyle(document.body).backgroundColor,
+      chrome: document.getElementById('gx-theme-color').getAttribute('content'),
+    }));
+    chk('choosing night is remembered and applied before paint', n.attr === 'night' && n.bg === 'rgb(15, 17, 23)', JSON.stringify(n));
+    chk('the phone chrome follows a saved night choice', n.chrome.toLowerCase() === '#0f1117', n.chrome);
+    await fresh.evaluate(() => localStorage.setItem('gx_theme', 'garbage'));
+    await fresh.reload({ waitUntil: 'domcontentloaded' });
+    chk('a corrupted saved value falls back to ivory', await fresh.evaluate(() => document.documentElement.getAttribute('data-theme')) === 'ivory');
+    await fresh.context().close();
+  }
+
   // the picker itself
   await pg.evaluate(() => gxThemeMenu());
   await pg.waitForTimeout(400);

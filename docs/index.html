@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="he" dir="rtl" data-theme="ivory">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -51,8 +51,9 @@
 }
 
 /* ──────────────────────────────────────────────────────────────
-   ערכות צבע. :root מחזיק את "לילה" כברירת מחדל; כל ערכה אחרת
-   דורסת את אותם משתנים דרך data-theme על <html>. שום קובץ CSS
+   ערכות צבע. ברירת המחדל היא "שנהב": התג <html> נושא data-theme="ivory"
+   כבר בקובץ, אז גם בלי JavaScript זה מה שרואים. :root מחזיק את הערכים
+   של "לילה", וכל ערכה אחרת דורסת אותם דרך data-theme על <html>. שום קובץ CSS
    אחר לא צריך להשתנות — כל צבע באתר עובר דרך המשתנים האלה.
    ────────────────────────────────────────────────────────────── */
 
@@ -784,13 +785,17 @@ select.fi { cursor: pointer; }
 
 <!-- PWA support -->
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#1D9E75" id="gx-theme-color">
+<meta name="theme-color" content="#F7F4EF" id="gx-theme-color">
 <script>
   // before first paint: no flash of the wrong palette
   (function () {
     try {
       var t = localStorage.getItem('gx_theme');
-      if (t && t !== 'night') document.documentElement.setAttribute('data-theme', t);
+      if (t === 'night' || t === 'brass' || t === 'ink' || t === 'ivory') {
+        document.documentElement.setAttribute('data-theme', t);
+        var m = {night:'#0F1117', brass:'#14120F', ink:'#0E1418', ivory:'#F7F4EF'}[t];
+        document.getElementById('gx-theme-color').setAttribute('content', m);
+      }
     } catch (e) {}
   })();
 </script>
@@ -1162,18 +1167,17 @@ async function gxFetch(path, opts) {
 // הערכה נשמרת בדפדפן של המשתמש בלבד. אם localStorage חסום (גלישה פרטית),
 // הכל עדיין עובד — פשוט חוזרים לברירת המחדל בטעינה הבאה.
 const GX_THEMES = [
-  { id: 'night',  name: 'לילה',        sub: 'כחול-אפור כהה — ברירת המחדל', dots: ['#0F1117', '#1D9E75', '#F0F2F5'] },
+  { id: 'night',  name: 'לילה',        sub: 'כחול-אפור כהה, נוח בערב', dots: ['#0F1117', '#1D9E75', '#F0F2F5'] },
   { id: 'brass',  name: 'פחם ופליז',   sub: 'חם ורך, מבטא זהב עמום',       dots: ['#14120F', '#C9A227', '#EDE8E0'] },
   { id: 'ink',    name: 'דיו ומרווה',  sub: 'כחול עמוק, גוונים מעושנים',   dots: ['#0E1418', '#6E9E86', '#E6EBEF'] },
-  { id: 'ivory',  name: 'שנהב',        sub: 'בהיר — הכי קריא באור יום',    dots: ['#F7F4EF', '#3F7D5C', '#23211E'] },
+  { id: 'ivory',  name: 'שנהב',        sub: 'בהיר ורך — ברירת המחדל',    dots: ['#F7F4EF', '#3F7D5C', '#23211E'] },
 ];
 
 function gxTheme() {
-  try { return localStorage.getItem('gx_theme') || 'night'; } catch (e) { return 'night'; }
+  try { return localStorage.getItem('gx_theme') || 'ivory'; } catch (e) { return 'ivory'; }
 }
 function gxSetTheme(id) {
-  if (id === 'night') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', id);
+  document.documentElement.setAttribute('data-theme', id);
   try { localStorage.setItem('gx_theme', id); } catch (e) {}
   // keep the phone browser chrome in step with the palette
   const meta = document.getElementById('gx-theme-color');
