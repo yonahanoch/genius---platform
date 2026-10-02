@@ -27,7 +27,15 @@ const { chromium } = require('playwright');
   await pg.click('.sidebar >> text=כמה להכין');
   await pg.waitForTimeout(1500);
   chk('menu closes after choosing a screen', !(await pg.evaluate(() => document.body.classList.contains('menu-open'))));
+  // tomorrow may be a closed day (Friday, a holiday); the table check needs a
+  // day that actually has a table, or it would pass without testing anything
+  for (const v of await pg.$$eval('#prod-date option', o => o.map(x => x.value))) {
+    if ((await pg.locator('#production-body').innerText()).includes('כמות מוצעת')) break;
+    await pg.evaluate(d => loadProduction(d), v);
+    await pg.waitForTimeout(700);
+  }
   chk('production screen shown', (await pg.locator('#production-body').innerText()).includes('כמות מוצעת'));
+  chk('the table is really there to test', await pg.locator('#production-body table').count() > 0);
   chk('wide table scrolls inside its box, page does not', (await overflow()) <= 1, await overflow());
   await pg.screenshot({ path: 'shot_mobile_production.png', fullPage: true });
 

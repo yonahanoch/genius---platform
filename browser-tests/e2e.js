@@ -50,8 +50,20 @@ const { chromium } = require('playwright');
 
   console.log('=== production plan ===');
   await go('production');
-  const pr = await txt('#production-body');
-  chk('production plan renders for tomorrow', pr.includes('כמות מוצעת ליום') && pr.includes('חלה מתוקה'), pr.slice(0, 200));
+  let pr = await txt('#production-body');
+  // The default is tomorrow. On a Friday or a holiday eve that is a closed day,
+  // and the honest screen says so — then we check the next day that is open.
+  if (pr.includes('אין מה להכין')) {
+    chk('a closed day says there is nothing to prepare', pr.includes('סגורה'), pr.slice(0, 200));
+    const opts = await pg.$$eval('#prod-date option', o => o.map(x => x.value));
+    for (const v of opts.slice(1)) {
+      await pg.evaluate(d => loadProduction(d), v);
+      await pg.waitForTimeout(700);
+      pr = await txt('#production-body');
+      if (!pr.includes('אין מה להכין')) break;
+    }
+  }
+  chk('production plan renders for the next open day', pr.includes('כמות מוצעת ליום') && pr.includes('חלה מתוקה'), pr.slice(0, 200));
   chk('shows what it is based on', pr.includes('מדידות') && pr.includes('ימי מכירה רגילים'), pr.slice(-200));
   const prodOpts = await pg.$$eval('#prod-date option', o => o.map(x => x.value));
   await pg.selectOption('#prod-date', prodOpts[prodOpts.length - 1]);
@@ -278,6 +290,16 @@ const { chromium } = require('playwright');
   const adm = await txt('#admin-body');
   chk('admin dashboard shows real counts', adm.includes('חנויות אמיתיות') && adm.includes('חיבורים חיצוניים'), adm.slice(0, 200));
   chk('no invented admin numbers', !adm.includes('₪2,340') && !adm.includes('73%'), adm.slice(0, 200));
+  await pg.waitForFunction(() => !(document.getElementById('admin-backups') || {}).innerText?.includes('טוען'), null, { timeout: 8000 }).catch(() => {});
+  const bk0 = await txt('#admin-backups');
+  chk('admin sees the backup state', bk0.includes('גבה עכשיו') && /גיבוי/.test(bk0), bk0.slice(0, 200));
+  await pg.click('#gx-backup-now');
+  await pg.waitForFunction(() => /נוצר גיבוי חדש|כבר יש גיבוי/.test(document.getElementById('admin-backups').innerText), null, { timeout: 8000 }).catch(() => {});
+  const bk1 = await txt('#admin-backups');
+  chk('"back up now" makes a real snapshot', /genius-\d{4}-\d{2}-\d{2}\.db/.test(bk1) && /נוצר גיבוי חדש|כבר יש גיבוי/.test(bk1), bk1.slice(0, 240));
+  await pg.click('#gx-backup-now');
+  await pg.waitForFunction(() => document.getElementById('admin-backups').innerText.includes('כבר יש גיבוי'), null, { timeout: 8000 }).catch(() => {});
+  chk('a second press the same day does not duplicate', (await txt('#admin-backups')).includes('כבר יש גיבוי'), await txt('#admin-backups'));
   await go('stores');
   const adst = await txt('#admin-stores');
   chk('store list is the real one', adst.includes('מאפיית לחם הארץ') && adst.includes('פיתות השכונה'), adst.slice(0, 200));

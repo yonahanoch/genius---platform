@@ -2207,6 +2207,61 @@ LENDING_DISCLAIMER = ("הערכה פנימית בלבד, מחושבת מנתונ
                       "זו לא הצעת אשראי ולא התחייבות של גוף מממן.")
 
 
+TREND_MIN_MONTHS = 4
+TREND_MIN_CHANGE = 0.15
+# two-sided 95% Student-t critical values by degrees of freedom (n - 2)
+_T95 = {2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306,
+        9: 2.262, 10: 2.228, 12: 2.179, 15: 2.131, 20: 2.086, 30: 2.042}
+
+
+def _t95(df):
+    for k in sorted(_T95):
+        if df <= k:
+            return _T95[k]
+    return 1.96
+
+
+def monthly_trend(values):
+    """
+    Is monthly revenue really moving, or just noisy? Fits a straight line
+    through every month and calls a trend only when the fitted change over
+    the whole period is both large (>15% of the average month) and clearly
+    bigger than the month-to-month noise (95% t-test on the slope).
+
+    The old split compared the first half to the second; with 3 months that
+    was one month against two, so a single holiday month could flip the
+    trend and move the score by 20 points.
+    Returns (trend, change_pct or None, Hebrew explanation).
+    """
+    n = len(values)
+    if n < TREND_MIN_MONTHS:
+        return ("unknown", None,
+                "צריך לפחות %d חודשים מלאים כדי לקבוע מגמה — יש %d." % (TREND_MIN_MONTHS, n))
+    avg = sum(values) / n
+    if avg <= 0:
+        return "unknown", None, "אין מחזור חיובי לחישוב מגמה."
+    xm = (n - 1) / 2.0
+    sxx = sum((i - xm) ** 2 for i in range(n))
+    slope = sum((i - xm) * (v - avg) for i, v in enumerate(values)) / sxx
+    # change measured from where the fitted line starts, so "up 60%" means
+    # what a shop owner expects: 100 at the start, about 160 at the end
+    start = avg - slope * xm
+    change = slope * (n - 1) / (start if start > 0 else avg)
+    resid = [v - (avg + slope * (i - xm)) for i, v in enumerate(values)]
+    se = (sum(r * r for r in resid) / (n - 2) / sxx) ** 0.5
+    significant = se == 0 or abs(slope) / se >= _t95(n - 2)
+    pct = int(round(change * 100))
+    if abs(change) > TREND_MIN_CHANGE and significant and slope != 0:
+        word = "עלייה" if change > 0 else "ירידה"
+        return (("growing" if change > 0 else "declining"), pct,
+                "%s של כ-%d%% לאורך %d חודשים, עקבית מעבר לתנודות הרגילות." % (word, abs(pct), n))
+    if abs(change) > TREND_MIN_CHANGE:
+        return ("stable", pct,
+                "שינוי של %d%% לאורך %d חודשים, אבל התנודות בין החודשים גדולות מכדי לקבוע שזו מגמה."
+                % (pct, n))
+    return "stable", pct, "השינוי לאורך %d חודשים קטן מ-15%% — יציב." % n
+
+
 def calculate_credit_profile(csv_text, price_map=None):
     """
     A simple health score from the store's own sales. It is a heuristic,
@@ -2236,16 +2291,7 @@ def calculate_credit_profile(csv_text, price_map=None):
                            % LENDING_MIN_MONTHS)
 
     avg = sum(values) / n
-    mid = n // 2
-    first = sum(values[:mid]) / max(1, mid)
-    second = sum(values[mid:]) / max(1, n - mid)
-    trend = "stable"
-    if first > 0:
-        change = (second - first) / first
-        if change > 0.15:
-            trend = "growing"
-        elif change < -0.15:
-            trend = "declining"
+    trend, change_pct, trend_basis = monthly_trend(values)
 
     volatility = ((sum((v - avg) ** 2 for v in values) / n) ** 0.5 / avg * 100) if avg > 0 else 0.0
 
@@ -2281,6 +2327,8 @@ def calculate_credit_profile(csv_text, price_map=None):
         max_loan=int(round(avg * mult)) if (enough and LENDING_SHOW_AMOUNT) else 0,
         amount_hidden=bool(enough and not LENDING_SHOW_AMOUNT),
         reason=reason,
+        trend_change_pct=change_pct,
+        trend_basis_he=trend_basis,
         monthly_breakdown={m: round(monthly[m], 2) for m in months},
         revenue_basis="partial_prices" if coverage < 0.95 else "prices",
     )

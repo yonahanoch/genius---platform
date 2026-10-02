@@ -1440,6 +1440,59 @@ def test_nightly_runs_once_per_day():
     assert main.load_db()["meta"]["nightly_last"] == first
 
 
+
+# ---------------- credit-profile trend ----------------
+
+def _monthly_csv(per_day_by_month, year=2026):
+    """One row per day; per_day_by_month[i] is the daily qty in month i+1."""
+    import calendar
+    rows = ["תאריך,מוצר,כמות"]
+    for i, q in enumerate(per_day_by_month):
+        for d in range(1, calendar.monthrange(year, i + 1)[1] + 1):
+            rows.append("%04d-%02d-%02d,מוצר א,%d" % (year, i + 1, d, q))
+    return "\n".join(rows)
+
+
+def test_trend_needs_four_months_not_one_against_two():
+    # the old half-split read [100, 200, 200] as one month vs two -> "growing", +20 points
+    t, pct, why = main.monthly_trend([100, 200, 200])
+    assert t == "unknown" and pct is None and "4" in why
+
+
+def test_one_holiday_month_is_not_a_trend_wherever_it_falls():
+    # old code: spike in month 3 -> "declining", in month 4 -> "growing"
+    for spike_at in range(6):
+        v = [100] * 6
+        v[spike_at] = 180
+        assert main.monthly_trend(v)[0] == "stable", (spike_at, main.monthly_trend(v))
+
+
+def test_same_store_same_score_whatever_month_the_holiday_lands_in():
+    a = main.calculate_credit_profile(_monthly_csv([10, 10, 18, 10, 10, 10, 10]), {"מוצר א": 10})
+    b = main.calculate_credit_profile(_monthly_csv([10, 10, 10, 18, 10, 10, 10]), {"מוצר א": 10})
+    assert a["trend"] == b["trend"] == "stable", (a["trend"], b["trend"])
+    assert a["score"] == b["score"], (a["score"], b["score"])
+
+
+def test_a_real_steady_trend_is_still_found():
+    up = main.monthly_trend([100, 110, 121, 133, 146, 161])
+    down = main.monthly_trend([100, 90, 81, 73, 66, 59])
+    assert up[0] == "growing" and 55 <= up[1] <= 70, up
+    assert down[0] == "declining" and -50 <= down[1] <= -35, down
+
+
+def test_big_but_noisy_change_is_not_called_a_trend():
+    t, pct, why = main.monthly_trend([100, 60, 140, 80, 150, 90])
+    assert t == "stable" and abs(pct) > 15 and "תנודות" in why
+
+
+def test_credit_profile_explains_its_trend():
+    p = main.calculate_credit_profile(_monthly_csv([10, 11, 12, 13, 15, 16, 18]), {"מוצר א": 10})
+    assert p["trend"] == "growing" and p["trend_change_pct"] > 15 and p["trend_basis_he"]
+    p3 = main.calculate_credit_profile(_monthly_csv([10, 20, 20]), {"מוצר א": 10})
+    assert p3["trend"] == "unknown" and p3["score"] is not None and p3["trend_basis_he"]
+
+
 if __name__ == "__main__":
     fails = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
