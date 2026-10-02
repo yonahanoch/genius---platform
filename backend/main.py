@@ -552,6 +552,26 @@ def client_ip():
     return request.remote_addr or "?"
 
 
+@app.route("/whoami")
+def whoami():
+    """
+    How the server sees the caller: the socket address, the X-Forwarded-For
+    chain as it arrived, and which entry client_ip() picks. Only the caller's
+    own request is echoed back. This is how PROXY_HOPS gets measured on a host
+    instead of guessed: if every visitor shows the same "ip", the setting is
+    wrong and all rate limits are shared by everyone.
+    """
+    if rate_limited("whoami", 30, 60):
+        return jsonify({"error": "יותר מדי בקשות"}), 429
+    chain = [p.strip() for p in request.headers.get("X-Forwarded-For", "").split(",") if p.strip()]
+    return jsonify({
+        "ip": client_ip(),
+        "socket": request.remote_addr,
+        "forwarded_for": chain[:10],
+        "proxy_hops": PROXY_HOPS,
+    })
+
+
 def rate_limited(bucket, limit, per_seconds, per_ip=True, key=None):
     now = time.time()
     key = (bucket, key if key is not None else (client_ip() if per_ip else "*"))

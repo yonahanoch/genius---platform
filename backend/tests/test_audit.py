@@ -1493,6 +1493,23 @@ def test_credit_profile_explains_its_trend():
     assert p3["trend"] == "unknown" and p3["score"] is not None and p3["trend_basis_he"]
 
 
+
+def test_whoami_shows_how_the_caller_is_seen():
+    r = C.get("/whoami", headers={"X-Forwarded-For": "9.9.9.9, 8.8.8.8"}, environ_base={"REMOTE_ADDR": "10.0.0.5"})
+    j = r.json
+    assert r.status_code == 200 and j["socket"] == "10.0.0.5" and j["forwarded_for"] == ["9.9.9.9", "8.8.8.8"]
+    old = main.PROXY_HOPS
+    try:
+        main.PROXY_HOPS = 0
+        assert C.get("/whoami", headers={"X-Forwarded-For": "9.9.9.9"}, environ_base={"REMOTE_ADDR": "10.0.0.5"}).json["ip"] == "10.0.0.5"
+        main.PROXY_HOPS = 1
+        assert C.get("/whoami", headers={"X-Forwarded-For": "9.9.9.9, 8.8.8.8"}, environ_base={"REMOTE_ADDR": "10.0.0.5"}).json["ip"] == "8.8.8.8"
+    finally:
+        main.PROXY_HOPS = old
+    # it echoes only the caller's own request: nothing about stores or tokens
+    assert set(j) == {"ip", "socket", "forwarded_for", "proxy_hops"}
+
+
 if __name__ == "__main__":
     fails = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
