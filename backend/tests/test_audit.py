@@ -1594,6 +1594,122 @@ def test_proxy_health_needs_traffic_and_ignores_direct_callers():
     assert j["proxy"]["status"] == "unknown"
 
 
+
+# ---------------- self-update ----------------
+
+def _deploy_sandbox():
+    """A bare 'GitHub' repo and a 'server' clone of it, with a tiny project
+    whose test file passes or fails on demand."""
+    import subprocess, tempfile as tf
+    base = tf.mkdtemp(prefix="gx-deploy-test-")
+    origin, server, dev = (os.path.join(base, n) for n in ("origin.git", "server", "dev"))
+    g = lambda cwd, *a: subprocess.run(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t"] + list(a),
+                                       capture_output=True, text=True, check=True)
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", origin], check=True)
+    subprocess.run(["git", "clone", "-q", origin, dev], check=True, capture_output=True)
+    os.makedirs(os.path.join(dev, "backend", "tests"))
+
+    def commit(test_ok, msg):
+        with open(os.path.join(dev, "backend", "tests", "test_audit.py"), "w") as f:
+            f.write("# %s\nimport sys\nsys.exit(%d)\n" % (msg, 0 if test_ok else 1))
+        g(dev, "add", "-A"); g(dev, "commit", "-q", "-m", msg); g(dev, "push", "-q", "origin", "HEAD:main")
+        return g(dev, "rev-parse", "HEAD").stdout.strip()
+
+    commit(True, "first")
+    subprocess.run(["git", "clone", "-q", origin, server], check=True, capture_output=True)
+    return base, server, commit
+
+
+def test_self_update_deploys_only_after_tests_pass():
+    import shutil
+    base, server, commit = _deploy_sandbox()
+    try:
+        assert main.check_for_update(root=server)[0] == "up_to_date"
+        good = commit(True, "good change")
+        result, detail, new = main.check_for_update(root=server)
+        assert result == "updated" and new == good, (result, detail)
+        assert main._commit(server) == good
+        # no candidate worktree left behind
+        assert "gx-candidate" not in main._git(server, "worktree", "list").stdout
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_self_update_never_deploys_a_failing_commit_and_does_not_retry_it():
+    import shutil
+    base, server, commit = _deploy_sandbox()
+    try:
+        before = main._commit(server)
+        bad = commit(False, "broken change")
+        result, detail, new = main.check_for_update(root=server)
+        assert result == "tests_failed" and new is None and bad[:7] in detail, (result, detail)
+        assert main._commit(server) == before          # still on the old code
+        assert main.check_for_update(root=server)[0] == "skipped_failed"
+        fixed = commit(True, "fix")                      # a newer good commit goes through
+        assert main.check_for_update(root=server)[0] == "updated" and main._commit(server) == fixed
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_self_update_leaves_hand_edits_alone():
+    import shutil
+    base, server, commit = _deploy_sandbox()
+    try:
+        with open(os.path.join(server, "backend", "tests", "test_audit.py"), "a") as f:
+            f.write("# edited on the server\n")
+        commit(True, "upstream change")
+        before = main._commit(server)
+        assert main.check_for_update(root=server)[0] == "local_changes"
+        assert main._commit(server) == before
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_version_is_public_and_admin_sees_deploy_state():
+    v = C.get("/version").json
+    assert set(v) == {"commit", "started_at", "auto_deploy"} and v["auto_deploy"] is False
+    d = C.get("/admin/summary", headers=ADMIN).json["deploy"]
+    assert d["enabled"] is False and "every_seconds" in d
+
+
+
+def test_deploy_failure_names_the_failing_test():
+    out = "PASS test_a\nFAIL test_b -> AssertionError('x')\n" + "PASS test_z\n" * 40 + "\n40 passed, 1 failed\n"
+    s = main._test_failure_summary(out)
+    assert "FAIL test_b" in s and "40 passed, 1 failed" in s and "test_z" not in s, s
+    assert "Traceback" in main._test_failure_summary("Traceback (most recent call last):\nImportError: x")
+
+
+
+def test_self_update_is_not_blocked_by_files_the_host_rewrites():
+    import shutil, subprocess
+    base, server, commit = _deploy_sandbox()
+    try:
+        # .replit is tracked upstream, then Replit edits it on the server
+        dev = os.path.join(base, "dev")
+        with open(os.path.join(dev, ".replit"), "w") as f:
+            f.write("run = 'python backend/main.py'\n")
+        g = lambda cwd, *a: subprocess.run(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t"] + list(a),
+                                           capture_output=True, text=True, check=True)
+        g(dev, "add", "-A"); g(dev, "commit", "-q", "-m", "add .replit"); g(dev, "push", "-q", "origin", "HEAD:main")
+        assert main.check_for_update(root=server)[0] == "updated"
+        with open(os.path.join(server, ".replit"), "a") as f:
+            f.write("[userenv.shared]\nPROXY_HOPS = '3'\n")
+        new = commit(True, "upstream change")
+        result, detail, _ = main.check_for_update(root=server)
+        assert result == "updated" and main._commit(server) == new, (result, detail)
+        # the host's edit survives the update
+        assert "PROXY_HOPS" in open(os.path.join(server, ".replit")).read()
+        # but a real hand edit still stops it, and the message names the file
+        with open(os.path.join(server, "backend", "tests", "test_audit.py"), "a") as f:
+            f.write("# hand edit\n")
+        commit(True, "another change")
+        result, detail, _ = main.check_for_update(root=server)
+        assert result == "local_changes" and "test_audit.py" in detail, (result, detail)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 if __name__ == "__main__":
     fails = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

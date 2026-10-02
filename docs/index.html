@@ -1852,6 +1852,7 @@ function gxAdminDashboard(box) {
     chRow('תשלומים (Stripe)', ch.payments, 'צריך מפתח ו-Webhook חתום') +
     chRow('צ׳אט AI', ch.ai_chat, 'חסר מפתח') +
     gxProxyRow(d.proxy) +
+    gxDeployRow(d.deploy) +
     '<div class="sec" style="margin-top:20px">התראות מכל החנויות</div>' +
     ((d.alerts || []).length ? d.alerts.slice(0, 8).map(gxAlertRow).join('')
       : '<div class="net-card"><div class="net-sub">אין התראות פתוחות.</div></div>') +
@@ -1906,6 +1907,33 @@ function gxProxyRow(p) {
   return '<div class="setting-row"><div><div class="setting-label">זיהוי משתמשים (PROXY_HOPS=' + gxEsc(p.proxy_hops) + ')</div>' +
     '<div class="setting-sub">' + gxEsc(p.note_he || '') + '</div></div>' +
     '<span class="pill ' + st[0] + '"><span class="dot"></span>' + st[1] + '</span></div>';
+}
+
+// The server can update itself from GitHub; a new version goes live only if
+// the whole test suite passes on it first. This row shows what it last did.
+function gxDeployRow(p) {
+  if (!p) return '';
+  const words = {
+    up_to_date: ['g', 'מעודכן', 'הגרסה האחרונה רצה'],
+    updated: ['g', 'עודכן', 'עלתה גרסה חדשה'],
+    tests_failed: ['a', 'נחסם', 'גרסה חדשה נכשלה בבדיקות ולא עלתה — השרת נשאר על הקודמת'],
+    skipped_failed: ['a', 'נחסם', 'הגרסה החדשה כבר נכשלה בבדיקות — מחכה לתיקון'],
+    local_changes: ['a', 'עצור', 'יש שינויים ידניים בשרת — צריך לעדכן ביד'],
+    diverged: ['a', 'עצור', 'הגרסה בשרת לא תואמת ל-GitHub — צריך לעדכן ביד'],
+    fetch_failed: ['a', 'אין גישה', 'לא הצליח להגיע ל-GitHub'],
+    merge_failed: ['a', 'שגיאה', 'העדכון נכשל'],
+    error: ['a', 'שגיאה', 'שגיאה בבדיקת עדכון'],
+  };
+  let pill, sub;
+  if (!p.enabled) { pill = ['b', 'כבוי']; sub = 'מעדכנים ביד (git pull + הפעלה מחדש). להפעלה: AUTO_DEPLOY=1'; }
+  else if (!p.result) { pill = ['b', 'ממתין']; sub = 'הבדיקה הראשונה תרוץ בדקות הקרובות'; }
+  else { const w = words[p.result] || ['b', gxEsc(p.result), '']; pill = [w[0], w[1]]; sub = w[2]; }
+  const when = p.last_check ? ' · נבדק ' + gxEsc(p.last_check.replace('T', ' ').slice(5, 16)) : '';
+  const why = p.result && p.result !== 'up_to_date' && p.detail
+    ? '<div class="setting-sub" dir="ltr" style="text-align:right;font-size:10px">' + gxEsc(p.detail) + '</div>' : '';
+  return '<div class="setting-row"><div><div class="setting-label">עדכון אוטומטי · גרסה ' + gxEsc(p.running || '?') + '</div>' +
+    '<div class="setting-sub">' + gxEsc(sub) + when + '</div>' + why + '</div>' +
+    '<span class="pill ' + pill[0] + '"><span class="dot"></span>' + pill[1] + '</span></div>';
 }
 
 function gxAlertRow(a) {

@@ -25,6 +25,8 @@ import secrets
 import hashlib
 import sqlite3
 import tempfile
+import subprocess
+import sys
 import ipaddress
 import collections.abc
 import threading
@@ -1485,6 +1487,7 @@ def admin_summary():
             "ai_chat": bool(ANTHROPIC_KEY), "public_url": PUBLIC_URL or None,
         },
         "proxy": proxy_health(),
+        "deploy": deploy_status(),
         "generated_at": datetime.now().isoformat(),
     })
 
@@ -1772,6 +1775,174 @@ try:
     print("✓ Scheduler הופעל — ניתוח לילי ב-3:00")
 except ImportError:
     print("! APScheduler לא מותקן — אין ניתוח אוטומטי")
+
+# ===========================================
+# Self-update from GitHub, gated by the test suite
+# ===========================================
+# Every push used to need someone to `git pull` on Replit and restart; one
+# time the live server ran several commits behind, security fixes included.
+# With AUTO_DEPLOY=1 the server checks GitHub every few minutes. A new commit
+# is tested in a separate worktree first; only if the whole suite passes does
+# the server fast-forward and restart itself. A failing commit is never
+# deployed and never retried, and the admin dashboard says why.
+# Needs no credentials: the repo is fetched over the remote already set up.
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AUTO_DEPLOY = os.environ.get("AUTO_DEPLOY", "") == "1"
+DEPLOY_EVERY = int(os.environ.get("GENIUS_DEPLOY_EVERY", "300"))
+DEPLOY_BRANCH = os.environ.get("GENIUS_DEPLOY_BRANCH", "main")
+STARTED_AT = datetime.now().isoformat(timespec="seconds")
+_DEPLOY = {"last_check": None, "result": None, "detail": None, "commit": None}
+_DEPLOY_FAILED = set()
+# Files the host rewrites by itself. Replit edits .replit when a setting is
+# added in its UI, which left it "modified" on the live server, 2026-10-02 —
+# counting that as a hand edit would have blocked every update, silently.
+# If an upstream commit touches one of them, the fast-forward fails and says so.
+HOST_MANAGED_FILES = {".replit", "replit.nix"}
+
+
+def _git(root, *args, timeout=60):
+    return subprocess.run(["git", "-C", root] + list(args), capture_output=True, text=True, timeout=timeout)
+
+
+def _commit(root=None, ref="HEAD"):
+    try:
+        r = _git(root or REPO_ROOT, "rev-parse", ref, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:   # noqa: BLE001 — no git on this host
+        return None
+
+
+STARTUP_COMMIT = _commit()
+
+
+def _test_failure_summary(output):
+    """The lines that say WHAT failed, not the tail of the run: the FAIL lines
+    and the final count, falling back to the last lines (e.g. a crash)."""
+    lines = [l for l in output.strip().splitlines() if l.strip()]
+    keep = [l for l in lines if l.startswith("FAIL")][:5]
+    keep += [l for l in lines[-3:] if re.search(r"\d+ passed, \d+ failed", l)]
+    return " | ".join(keep)[:600] if keep else " | ".join(lines[-4:])[-600:]
+
+
+def check_for_update(root=None, test_cmd=None, branch=None):
+    """
+    One deploy check. Returns (result, detail, new_commit_or_None); result is
+    one of up_to_date, updated, tests_failed, skipped_failed, local_changes,
+    diverged, fetch_failed, merge_failed, error. Only "updated" moved HEAD.
+    """
+    root = root or REPO_ROOT
+    branch = branch or DEPLOY_BRANCH
+    test_cmd = test_cmd or [sys.executable, os.path.join("backend", "tests", "test_audit.py")]
+    try:
+        f = _git(root, "fetch", "-q", "origin", branch, timeout=120)
+        if f.returncode != 0:
+            return "fetch_failed", f.stderr.strip()[-300:], None
+        head, remote = _commit(root), _commit(root, "origin/" + branch)
+        if not head or not remote:
+            return "error", "git rev-parse failed", None
+        if head == remote:
+            return "up_to_date", head[:7], None
+        if _git(root, "merge-base", "--is-ancestor", head, remote).returncode != 0:
+            return "diverged", "%s is not an ancestor of origin/%s — not touching it" % (head[:7], branch), None
+        if remote in _DEPLOY_FAILED:
+            return "skipped_failed", "%s already failed its tests" % remote[:7], None
+        edited = [l[3:].strip() for l in _git(root, "status", "--porcelain", "--untracked-files=no").stdout.splitlines()
+                  if l.strip() and l[3:].strip() not in HOST_MANAGED_FILES]
+        if edited:
+            return "local_changes", "edited on the server: %s — update by hand" % ", ".join(edited[:5]), None
+
+        cand = tempfile.mkdtemp(prefix="gx-candidate-")
+        os.rmdir(cand)
+        try:
+            w = _git(root, "worktree", "add", "--detach", cand, remote, timeout=120)
+            if w.returncode != 0:
+                return "error", w.stderr.strip()[-300:], None
+            data = tempfile.mkdtemp(prefix="gx-candidate-data-")
+            env = dict(os.environ, GENIUS_DATA_DIR=data)
+            env.pop("AUTO_DEPLOY", None)
+            try:
+                t = subprocess.run(test_cmd, cwd=cand, env=env, capture_output=True, text=True, timeout=900)
+                ok, tail = t.returncode == 0, _test_failure_summary(t.stdout + t.stderr)
+            except subprocess.TimeoutExpired:
+                ok, tail = False, "tests timed out"
+            finally:
+                shutil.rmtree(data, ignore_errors=True)
+        finally:
+            _git(root, "worktree", "remove", "--force", cand, timeout=60)
+            _git(root, "worktree", "prune", timeout=60)
+            shutil.rmtree(cand, ignore_errors=True)
+        if not ok:
+            _DEPLOY_FAILED.add(remote)
+            return "tests_failed", "%s: %s" % (remote[:7], tail), None
+        m = _git(root, "merge", "--ff-only", remote)
+        if m.returncode != 0:
+            return "merge_failed", m.stderr.strip()[-300:], None
+        return "updated", "%s → %s" % (head[:7], remote[:7]), remote
+    except Exception as e:   # noqa: BLE001 — a deploy check must never take the server down
+        return "error", str(e)[:300], None
+
+
+def _restart_self():
+    """Replace this process with a fresh one on the same PID, so the Replit
+    workflow keeps owning it. Taken under the DB lock: no write is cut off."""
+    print("↻ עדכון אוטומטי — מפעיל מחדש עם הגרסה החדשה", flush=True)
+    env = dict(os.environ, GX_RESTARTED="1")
+    with db_lock():
+        # The web server's listening socket is inheritable, so without this the
+        # new process finds port 8080 held by its own previous self, fails to
+        # bind and exits — found by actually running a self-update, 2026-10-02.
+        try:
+            maxfd = os.sysconf("SC_OPEN_MAX")
+        except (AttributeError, ValueError, OSError):
+            maxfd = 4096
+        os.closerange(3, maxfd)
+        os.execve(sys.executable, [sys.executable] + sys.argv, env)
+
+
+def _wait_for_port(port, seconds=15):
+    """After a self-restart, give the old socket a moment to let go."""
+    import socket
+    deadline = time.time() + seconds
+    while True:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("0.0.0.0", port))
+            return True
+        except OSError:
+            if time.time() > deadline:
+                return False
+            time.sleep(0.5)
+        finally:
+            s.close()
+
+
+def _deploy_loop():
+    time.sleep(min(60, DEPLOY_EVERY))
+    while True:
+        result, detail, new = check_for_update()
+        _DEPLOY.update(last_check=datetime.now().isoformat(timespec="seconds"),
+                       result=result, detail=detail, commit=new)
+        if result not in ("up_to_date", "skipped_failed"):
+            print("deploy: %s — %s" % (result, detail), flush=True)
+        if result == "updated":
+            _restart_self()
+        time.sleep(DEPLOY_EVERY)
+
+
+def deploy_status():
+    return dict(_DEPLOY, enabled=AUTO_DEPLOY, running=(STARTUP_COMMIT or "")[:7] or None,
+                started_at=STARTED_AT, every_seconds=DEPLOY_EVERY)
+
+
+@app.route("/version")
+def version():
+    """Which commit is live. Public on purpose: it is how a deploy is checked
+    from outside, and a commit hash of a public repo reveals nothing."""
+    return jsonify({"commit": (STARTUP_COMMIT or "")[:7] or None, "started_at": STARTED_AT,
+                    "auto_deploy": AUTO_DEPLOY})
+
 
 # ── הפעלה ──
 
@@ -4957,5 +5128,11 @@ if __name__ == "__main__":
         print("  ⚠️  לוח החגים נגמר בתוך פחות משנה — להריץ tools/generate_holidays.py")
     if PROXY_HOPS == 0:
         print("  ℹ️  PROXY_HOPS=0 — X-Forwarded-For לא נסמך. מאחורי פרוקסי: למדוד ב-/whoami (Replit נמדד 3)")
+    print(f"גרסה: {(STARTUP_COMMIT or '?')[:7]} · עדכון אוטומטי: "
+          f"{'פעיל, כל %d שניות' % DEPLOY_EVERY if AUTO_DEPLOY else 'כבוי (AUTO_DEPLOY=1 להפעלה)'}")
     print("=" * 50)
+    if AUTO_DEPLOY:
+        threading.Thread(target=_deploy_loop, name="auto-deploy", daemon=True).start()
+    if os.environ.get("GX_RESTARTED") and not _wait_for_port(8080):
+        print("! פורט 8080 עדיין תפוס אחרי 15 שניות", flush=True)
     app.run(host="0.0.0.0", port=8080)

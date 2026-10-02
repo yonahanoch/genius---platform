@@ -8,7 +8,7 @@
 
 ```bash
 npm install -g playwright && npx playwright install chromium   # פעם אחת
-./browser-tests/run.sh e2e.js        # 76 בדיקות — כל המסכים במחשב
+./browser-tests/run.sh e2e.js        # 77 בדיקות — כל המסכים במחשב
 ./browser-tests/run.sh mobile.js     # 21 בדיקות — פריסת טלפון ב-375px
 ./browser-tests/run.sh firstrun.js   # 16 בדיקות — חנות חדשה בלי נתונים
 ./browser-tests/run.sh degrade.js    # 13 בדיקות — כל מסך מול תשובת שרת ריקה
