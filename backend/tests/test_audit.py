@@ -1354,9 +1354,25 @@ def test_subscribe_does_not_reveal_which_stores_exist():
 
 
 def test_forwarded_for_cannot_be_used_to_reset_the_rate_limit():
-    assert main.PROXY_HOPS == 0, "X-Forwarded-For must not be trusted by default"
-    with main.app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"}):
-        assert main.client_ip() != "1.2.3.4"
+    # The DEFAULT is what matters, not whatever this host has configured
+    # (Replit runs with PROXY_HOPS=3), so boot a fresh process without it.
+    import subprocess, tempfile, shutil
+    d = tempfile.mkdtemp(prefix="gx_hops_")
+    try:
+        env = {k: v for k, v in os.environ.items() if k != "PROXY_HOPS"}
+        env.update(GENIUS_DATA_DIR=d, ADMIN_TOKEN="t")
+        r = subprocess.run([sys.executable, "-c", "import sys;sys.path.insert(0,%r);import main;print('HOPS', main.PROXY_HOPS)"
+                            % os.path.dirname(main.__file__)], env=env, capture_output=True, text=True, timeout=120)
+        assert "HOPS 0" in r.stdout, "X-Forwarded-For must not be trusted by default: " + r.stdout[-200:] + r.stderr[-200:]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    old = main.PROXY_HOPS
+    try:
+        main.PROXY_HOPS = 0
+        with main.app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"}):
+            assert main.client_ip() != "1.2.3.4"
+    finally:
+        main.PROXY_HOPS = old
 
 
 def test_restored_json_backup_is_migrated_even_after_demo_stores_exist():
@@ -1707,6 +1723,34 @@ def test_self_update_is_not_blocked_by_files_the_host_rewrites():
         result, detail, _ = main.check_for_update(root=server)
         assert result == "local_changes" and "test_audit.py" in detail, (result, detail)
     finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+
+def test_candidate_tests_run_without_this_servers_settings():
+    # what happened on Replit: PROXY_HOPS=3 in the environment made the
+    # suite fail there, so no update could ever have gone through
+    import shutil, subprocess
+    base, server, commit = _deploy_sandbox()
+    dev = os.path.join(base, "dev")
+    saved = {k: os.environ.get(k) for k in ("PROXY_HOPS", "ADMIN_TOKEN", "STRIPE_SECRET_KEY")}
+    try:
+        with open(os.path.join(dev, "backend", "tests", "test_audit.py"), "w") as f:
+            f.write("import os, sys\nleak = [k for k in ('PROXY_HOPS', 'ADMIN_TOKEN', 'STRIPE_SECRET_KEY') if k in os.environ]\n"
+                    "print('FAIL leaked', leak) if leak else print('1 passed, 0 failed')\nsys.exit(1 if leak else 0)\n")
+        g = lambda *a: subprocess.run(["git", "-C", dev, "-c", "user.name=t", "-c", "user.email=t@t"] + list(a),
+                                      capture_output=True, text=True, check=True)
+        g("commit", "-qam", "env-sensitive test"); g("push", "-q", "origin", "HEAD:main")
+        os.environ.update(PROXY_HOPS="3", ADMIN_TOKEN="x", STRIPE_SECRET_KEY="sk_test_x")
+        result, detail, _ = main.check_for_update(root=server)
+        assert result == "updated", (result, detail)
+        assert "PATH" in main._test_env() and "PROXY_HOPS" not in main._test_env()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         shutil.rmtree(base, ignore_errors=True)
 
 

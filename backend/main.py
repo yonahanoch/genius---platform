@@ -1816,6 +1816,20 @@ def _commit(root=None, ref="HEAD"):
 STARTUP_COMMIT = _commit()
 
 
+# The candidate is judged on its code, not on this server's settings. On
+# Replit PROXY_HOPS=3 is set, and the suite's "untrusted by default" test
+# failed there, which would have blocked every update (found 2026-10-02 by
+# running the suite on the live host before switching this on).
+APP_ENV_KEYS = {"ADMIN_TOKEN", "ANTHROPIC_API_KEY", "AUTO_DEPLOY", "LENDING_SHOW_AMOUNT",
+                "NEW_STORE_LIMIT_PER_HOUR", "ONBOARD_DAILY_CAP", "PROXY_HOPS", "PUBLIC_URL", "REPLIT_URL"}
+APP_ENV_PREFIXES = ("GENIUS_", "CHAT_", "STRIPE_", "TWILIO_", "GX_")
+
+
+def _test_env():
+    return {k: v for k, v in os.environ.items()
+            if k not in APP_ENV_KEYS and not k.startswith(APP_ENV_PREFIXES)}
+
+
 def _test_failure_summary(output):
     """The lines that say WHAT failed, not the tail of the run: the FAIL lines
     and the final count, falling back to the last lines (e.g. a crash)."""
@@ -1859,8 +1873,7 @@ def check_for_update(root=None, test_cmd=None, branch=None):
             if w.returncode != 0:
                 return "error", w.stderr.strip()[-300:], None
             data = tempfile.mkdtemp(prefix="gx-candidate-data-")
-            env = dict(os.environ, GENIUS_DATA_DIR=data)
-            env.pop("AUTO_DEPLOY", None)
+            env = dict(_test_env(), GENIUS_DATA_DIR=data)
             try:
                 t = subprocess.run(test_cmd, cwd=cand, env=env, capture_output=True, text=True, timeout=900)
                 ok, tail = t.returncode == 0, _test_failure_summary(t.stdout + t.stderr)
