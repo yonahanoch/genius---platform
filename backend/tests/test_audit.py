@@ -1510,6 +1510,27 @@ def test_whoami_shows_how_the_caller_is_seen():
     assert set(j) == {"ip", "socket", "forwarded_for", "proxy_hops"}
 
 
+
+def test_replit_three_hop_chain_as_measured_live():
+    # 2026-10-02, measured on the Replit dev URL: caller, internal 10.x proxy,
+    # local 127.0.0.1 proxy; the socket is 127.0.0.1. A forged header is
+    # prepended by the edge, so the real caller stays third from the right.
+    old = main.PROXY_HOPS
+    env = {"REMOTE_ADDR": "127.0.0.1"}
+    try:
+        main.PROXY_HOPS = 3
+        real = {"X-Forwarded-For": "34.162.191.81, 10.62.9.22, 127.0.0.1"}
+        forged = {"X-Forwarded-For": "9.9.9.9, 8.8.8.8, 34.162.191.81, 10.62.31.166, 127.0.0.1"}
+        assert C.get("/whoami", headers=real, environ_base=env).json["ip"] == "34.162.191.81"
+        assert C.get("/whoami", headers=forged, environ_base=env).json["ip"] == "34.162.191.81"
+        # a request that skipped the proxies (too few entries) falls back to the socket
+        assert C.get("/whoami", headers={"X-Forwarded-For": "9.9.9.9"}, environ_base=env).json["ip"] == "127.0.0.1"
+        main.PROXY_HOPS = 1   # the value the docs used to recommend: everyone looks the same
+        assert C.get("/whoami", headers=real, environ_base=env).json["ip"] == "127.0.0.1"
+    finally:
+        main.PROXY_HOPS = old
+
+
 if __name__ == "__main__":
     fails = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

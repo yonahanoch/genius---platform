@@ -532,7 +532,9 @@ _RATE_LOCK = threading.Lock()
 # served directly (which is how `python backend/main.py` runs) believed a
 # header anyone could set, and every per-IP limit came off with one line:
 #     curl -H 'X-Forwarded-For: 1.2.3.4' ...
-# Set PROXY_HOPS=1 on Replit and behind any single reverse proxy.
+# Set it to the number of proxies in front of the server, measured with
+# /whoami, not guessed. Replit's dev URL measured 3 on 2026-10-02:
+# caller -> Replit edge -> 10.x internal proxy -> 127.0.0.1 local proxy.
 PROXY_HOPS = int(os.environ.get("PROXY_HOPS", "0"))
 
 
@@ -4890,6 +4892,6 @@ if __name__ == "__main__":
     if holiday_calendar_expiring():
         print("  ⚠️  לוח החגים נגמר בתוך פחות משנה — להריץ tools/generate_holidays.py")
     if PROXY_HOPS == 0:
-        print("  ℹ️  PROXY_HOPS=0 — X-Forwarded-For לא נסמך. מאחורי פרוקסי (Replit) להגדיר 1")
+        print("  ℹ️  PROXY_HOPS=0 — X-Forwarded-For לא נסמך. מאחורי פרוקסי: למדוד ב-/whoami (Replit נמדד 3)")
     print("=" * 50)
     app.run(host="0.0.0.0", port=8080)
