@@ -292,6 +292,7 @@ const { chromium } = require('playwright');
   chk('no invented admin numbers', !adm.includes('₪2,340') && !adm.includes('73%'), adm.slice(0, 200));
   await pg.waitForFunction(() => !(document.getElementById('admin-backups') || {}).innerText?.includes('טוען'), null, { timeout: 8000 }).catch(() => {});
   const bk0 = await txt('#admin-backups');
+  chk('admin sees whether visitors are told apart', adm.includes('זיהוי משתמשים') && adm.includes('PROXY_HOPS=0'), adm.slice(0, 300));
   chk('admin sees the backup state', bk0.includes('גבה עכשיו') && /גיבוי/.test(bk0), bk0.slice(0, 200));
   await pg.click('#gx-backup-now');
   await pg.waitForFunction(() => /נוצר גיבוי חדש|כבר יש גיבוי/.test(document.getElementById('admin-backups').innerText), null, { timeout: 8000 }).catch(() => {});

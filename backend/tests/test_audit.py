@@ -1531,6 +1531,69 @@ def test_replit_three_hop_chain_as_measured_live():
         main.PROXY_HOPS = old
 
 
+
+def _proxy_traffic(chain, n=8):
+    for _ in range(n):
+        C.get("/whoami", headers={"X-Forwarded-For": chain}, environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+
+def test_proxy_health_ok_when_hops_match_the_chain():
+    old = main.PROXY_HOPS
+    try:
+        main.PROXY_HOPS = 3
+        main._PROXY_SEEN.clear()
+        _proxy_traffic("34.162.191.81, 10.62.9.22, 127.0.0.1")
+        h = main.proxy_health()
+        assert h["status"] == "ok" and h["suggested_hops"] == 3, h
+    finally:
+        main.PROXY_HOPS = old
+        main._PROXY_SEEN.clear()
+
+
+def test_proxy_health_catches_replit_adding_a_layer():
+    old = main.PROXY_HOPS
+    try:
+        main.PROXY_HOPS = 3
+        main._PROXY_SEEN.clear()
+        # one more internal hop appears: hops=3 now lands on 10.1.1.1 for everyone
+        _proxy_traffic("34.162.191.81, 10.1.1.1, 10.62.9.22, 127.0.0.1")
+        h = main.proxy_health()
+        assert h["status"] == "misconfigured" and h["suggested_hops"] == 4, h
+        assert "PROXY_HOPS=4" in h["note_he"]
+    finally:
+        main.PROXY_HOPS = old
+        main._PROXY_SEEN.clear()
+
+
+def test_proxy_health_catches_the_default_zero_behind_a_proxy():
+    old = main.PROXY_HOPS
+    try:
+        main.PROXY_HOPS = 0
+        main._PROXY_SEEN.clear()
+        _proxy_traffic("34.162.191.81, 10.62.9.22, 127.0.0.1")
+        h = main.proxy_health()
+        assert h["status"] == "misconfigured" and h["suggested_hops"] == 3, h
+    finally:
+        main.PROXY_HOPS = old
+        main._PROXY_SEEN.clear()
+
+
+def test_forged_entries_do_not_move_the_suggestion():
+    assert main.suggest_proxy_hops(["9.9.9.9", "8.8.8.8", "34.162.191.81", "10.62.31.166", "127.0.0.1"]) == 3
+    assert main.suggest_proxy_hops(["10.0.0.1", "127.0.0.1"]) is None
+
+
+def test_proxy_health_needs_traffic_and_ignores_direct_callers():
+    main._PROXY_SEEN.clear()
+    assert main.proxy_health()["status"] == "unknown"
+    # no X-Forwarded-For (local dev) and a public socket (no proxy) are not judged
+    C.get("/whoami", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+    C.get("/whoami", headers={"X-Forwarded-For": "9.9.9.9"}, environ_base={"REMOTE_ADDR": "34.1.1.1"})
+    assert main.proxy_health()["sampled"] == 0
+    j = C.get("/admin/summary", headers=ADMIN).json
+    assert j["proxy"]["status"] == "unknown"
+
+
 if __name__ == "__main__":
     fails = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

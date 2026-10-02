@@ -1851,6 +1851,7 @@ function gxAdminDashboard(box) {
     chRow('WhatsApp (Twilio)', ch.whatsapp, 'דוחות נשמרים בתור: ' + st.queued_reports) +
     chRow('תשלומים (Stripe)', ch.payments, 'צריך מפתח ו-Webhook חתום') +
     chRow('צ׳אט AI', ch.ai_chat, 'חסר מפתח') +
+    gxProxyRow(d.proxy) +
     '<div class="sec" style="margin-top:20px">התראות מכל החנויות</div>' +
     ((d.alerts || []).length ? d.alerts.slice(0, 8).map(gxAlertRow).join('')
       : '<div class="net-card"><div class="net-sub">אין התראות פתוחות.</div></div>') +
@@ -1895,6 +1896,16 @@ async function gxAdminBackups(post) {
     rows +
     '<div class="net-sub" style="margin-top:8px;font-size:11px">נשמרים ' + gxEsc(d.keep_days == null ? '—' : d.keep_days) +
       ' גיבויים אחרונים. ' + gxEsc(d.note || '') + '</div></div>';
+}
+
+// Rate limits are per visitor only while PROXY_HOPS matches the host's proxy
+// chain. The server checks that on live traffic; this shows its verdict.
+function gxProxyRow(p) {
+  if (!p) return '';
+  const st = { ok: ['g', 'תקין'], misconfigured: ['a', 'צריך תיקון'], unknown: ['b', 'עוד לא ידוע'] }[p.status] || ['b', gxEsc(p.status)];
+  return '<div class="setting-row"><div><div class="setting-label">זיהוי משתמשים (PROXY_HOPS=' + gxEsc(p.proxy_hops) + ')</div>' +
+    '<div class="setting-sub">' + gxEsc(p.note_he || '') + '</div></div>' +
+    '<span class="pill ' + st[0] + '"><span class="dot"></span>' + st[1] + '</span></div>';
 }
 
 function gxAlertRow(a) {

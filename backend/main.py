@@ -554,6 +554,69 @@ def client_ip():
     return request.remote_addr or "?"
 
 
+# ── Is PROXY_HOPS still right? ──
+# Replit can change its proxy chain without notice. When it does, client_ip()
+# quietly starts returning an internal address (10.x, 127.0.0.1) for everyone
+# and every visitor shares one rate limit again. Watch the last requests that
+# came through a proxy and say so on the admin dashboard.
+PROXY_SAMPLE = 50
+PROXY_MIN_SAMPLE = 5
+_PROXY_SEEN = []            # (picked_is_public, suggested_hops)
+_PROXY_LOCK = threading.Lock()
+
+
+def _is_public(addr):
+    try:
+        return ipaddress.ip_address(addr).is_global
+    except ValueError:
+        return False
+
+
+def suggest_proxy_hops(chain):
+    """
+    Entries counted from the right up to the rightmost public address. Our
+    own proxies sit on private addresses, and anything a caller forges is
+    added to the left of its real address, so forging cannot move this.
+    None when the chain has no public address at all.
+    """
+    for i in range(len(chain) - 1, -1, -1):
+        if _is_public(chain[i]):
+            return len(chain) - i
+    return None
+
+
+@app.before_request
+def _observe_proxy_chain():
+    chain = [p.strip() for p in request.headers.get("X-Forwarded-For", "").split(",") if p.strip()]
+    if not chain or _is_public(request.remote_addr or ""):
+        return       # no proxy in front (local dev, a direct caller): nothing to judge
+    with _PROXY_LOCK:
+        _PROXY_SEEN.append((_is_public(client_ip()), suggest_proxy_hops(chain)))
+        del _PROXY_SEEN[:-PROXY_SAMPLE]
+
+
+def proxy_health():
+    with _PROXY_LOCK:
+        seen = list(_PROXY_SEEN)
+    out = {"proxy_hops": PROXY_HOPS, "sampled": len(seen)}
+    if len(seen) < PROXY_MIN_SAMPLE:
+        return dict(out, status="unknown",
+                    note_he="עוד לא היו מספיק בקשות דרך פרוקסי כדי לבדוק (%d מתוך %d)."
+                            % (len(seen), PROXY_MIN_SAMPLE))
+    bad = [x for x in seen if not x[0]]
+    votes = [x[1] for x in seen if x[1]]
+    suggested = max(set(votes), key=votes.count) if votes else None
+    if len(bad) * 2 > len(seen):
+        return dict(out, status="misconfigured", suggested_hops=suggested,
+                    note_he=("ב-%d מתוך %d הבקשות האחרונות השרת זיהה כתובת פנימית במקום כתובת המשתמש — "
+                             "כל המשתמשים חולקים מגבלת קצב אחת. %s"
+                             % (len(bad), len(seen),
+                                ("נראה שהערך הנכון הוא PROXY_HOPS=%d — אמת ב-/whoami לפני שמשנים." % suggested)
+                                if suggested else "לא נמצאה כתובת ציבורית בשרשרת.")))
+    return dict(out, status="ok", suggested_hops=suggested,
+                note_he="כל משתמש מזוהה בכתובת שלו (%d מתוך %d בקשות אחרונות)." % (len(seen) - len(bad), len(seen)))
+
+
 @app.route("/whoami")
 def whoami():
     """
@@ -1421,6 +1484,7 @@ def admin_summary():
             "whatsapp": bool(TWILIO_SID), "payments": bool(STRIPE_KEY and STRIPE_WEBHOOK_SECRET),
             "ai_chat": bool(ANTHROPIC_KEY), "public_url": PUBLIC_URL or None,
         },
+        "proxy": proxy_health(),
         "generated_at": datetime.now().isoformat(),
     })
 
