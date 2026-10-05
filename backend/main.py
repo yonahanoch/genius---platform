@@ -2974,6 +2974,9 @@ BKMV_C100 = [
 ]
 BKMV_D110 = [
     ("doc_type", 23, 3), ("doc_number", 26, 20), ("line_number", 46, 4),
+    # fields 1256-1257: the document this one is based on. Mandatory "when the
+    # document is based on another document" (instruction 131, section 4.4).
+    ("base_doc_type", 50, 3), ("base_doc_number", 53, 20),
     ("sku", 74, 20), ("description", 94, 30), ("unit", 204, 20),
     ("quantity", 224, 17), ("unit_price", 241, 15),
     ("line_discount", 256, 15), ("line_total", 271, 15),
@@ -2994,9 +2997,12 @@ BKMV_Z900 = [("total_records", 46, 15)]
 # document types (spec appendix, verified against instruction 131 on gov.il):
 # 300 invoice/transaction invoice, 305 tax invoice, 320 tax invoice/receipt,
 # 330 credit tax invoice. 400 (receipt) carries payments, not item lines.
-# Open question for a real file: a business that issues 300 and then 305 for
-# the same sale would be counted twice — check doc_type_counts on import.
-BKMV_SALES_DOCS = {"300", "305", "320"}
+# 310 is a summary invoice over delivery notes (200, not counted).
+# A business that issues a transaction invoice (300) and later a tax invoice
+# (305/320) for the same sale has both in the file. The later one names the
+# earlier one as its base document (D110 fields 1256-1257), so the base is
+# dropped and the sale counts once — see _superseded_docs().
+BKMV_SALES_DOCS = {"300", "305", "310", "320"}
 BKMV_CREDIT_DOCS = {"330"}  # credit notes reverse a sale
 
 
@@ -3136,6 +3142,30 @@ def parse_bkmv(content):
     }
 
 
+def _doc_key(doc_type, doc_number):
+    """Document numbers are zero-padded differently by different systems."""
+    return ((doc_type or "").strip(), (doc_number or "").strip().lstrip("0") or "0")
+
+
+def _superseded_docs(lines, allowed):
+    """
+    Sales documents that a later sales document in the same file is based on.
+    A credit note (330) based on an invoice reverses it and is counted as a
+    minus — it does NOT make the invoice disappear, so it is not a reason here.
+    """
+    counted = lambda t: t in BKMV_SALES_DOCS and (not allowed or t in allowed)
+    out = set()
+    for ln in lines:
+        if ln.get("cancelled") or not counted(ln.get("doc_type")):
+            continue
+        bt = (ln.get("base_doc_type") or "").strip()
+        if bt and counted(bt) and (ln.get("base_doc_number") or "").strip():
+            base = _doc_key(bt, ln.get("base_doc_number"))
+            if base != _doc_key(ln.get("doc_type"), ln.get("doc_number")):
+                out.add(base)
+    return out
+
+
 def bkmv_to_store_data(parsed, sales_doc_types=None):
     """
     Turns a parsed BKMVDATA file into the three things the rest of the
@@ -3144,12 +3174,16 @@ def bkmv_to_store_data(parsed, sales_doc_types=None):
     allowed = sales_doc_types if sales_doc_types is not None else (BKMV_SALES_DOCS | BKMV_CREDIT_DOCS)
 
     sales = {}
-    prices, seen_dates, skipped_cancelled = {}, 0, 0
+    prices, seen_dates, skipped_cancelled, skipped_superseded = {}, 0, 0, 0
+    superseded = _superseded_docs(parsed.get("lines", []), allowed)
     for ln in parsed.get("lines", []):
         if allowed and ln.get("doc_type") not in allowed:
             continue
         if ln.get("cancelled"):
             skipped_cancelled += 1
+            continue
+        if _doc_key(ln.get("doc_type"), ln.get("doc_number")) in superseded:
+            skipped_superseded += 1      # the same sale, counted on its final document
             continue
         name = (ln.get("description") or ln.get("sku") or "").strip()
         if not name:
@@ -3183,6 +3217,11 @@ def bkmv_to_store_data(parsed, sales_doc_types=None):
         "prices": prices,
         "sale_lines_used": seen_dates,
         "cancelled_lines_skipped": skipped_cancelled,
+        # only documents that were actually here and left out; a base that sat in
+        # an earlier export is not "replaced" in this one
+        "superseded_documents": len({_doc_key(l.get("doc_type"), l.get("doc_number"))
+                                     for l in parsed.get("lines", [])} & superseded),
+        "superseded_lines_skipped": skipped_superseded,
     }
 
 def store_for_import(db, store_id):
@@ -3259,6 +3298,8 @@ def import_bkmv(store_id):
         "encoding": parsed.get("encoding"),
         "cancelled_documents": parsed.get("cancelled_documents", 0),
         "cancelled_lines_skipped": converted.get("cancelled_lines_skipped", 0),
+        "superseded_documents": converted.get("superseded_documents", 0),
+        "superseded_lines_skipped": converted.get("superseded_lines_skipped", 0),
         "records_seen": parsed["records_seen"],
         "records_declared": parsed["records_declared"],
         "count_matches": parsed["count_matches"],

@@ -2536,6 +2536,7 @@ async function gxConnect(preview) {
     rows += gxRow('מסמכים', gxNum(d.documents)) + gxRow('שורות מכירה', gxNum(d.sale_lines_used) + ' מתוך ' + gxNum(d.line_items)) +
             gxRow('פריטי מלאי', gxNum(d.inventory_items)) + gxRow('מוצרים עם מחיר', gxNum(d.products_with_price));
     if (d.cancelled_documents) rows += gxRow('מסמכים מבוטלים (לא נספרו)', gxNum(d.cancelled_documents));
+    if (d.superseded_documents) rows += gxRow('מסמכים שהוחלפו בחשבונית סופית (נספרו פעם אחת)', gxNum(d.superseded_documents));
     if (d.count_matches === false) rows += gxRow('בדיקת שלמות', '⚠ מספר הרשומות בקובץ לא תואם לרשומת הסיום');
   } else {
     rows += gxRow('מוצרים', gxNum(d.products)) + gxRow('שורות שנקלטו', gxNum(d.sale_rows) + ' מתוך ' + gxNum(d.rows_in_file)) +

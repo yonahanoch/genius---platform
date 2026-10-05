@@ -1754,6 +1754,81 @@ def test_candidate_tests_run_without_this_servers_settings():
         shutil.rmtree(base, ignore_errors=True)
 
 
+
+# ---------------- BKMV: the same sale on two documents ----------------
+
+def _bkmv_docs(docs):
+    """docs: [(doc_type, doc_no, base_type, base_no, qty, yyyymmdd)] -> a
+    BKMVDATA file laid out by instruction 131 (D110 base doc at 50/3, 53/20)."""
+    recs = [_fixed([(1, "A100"), (5, "000000001")], 95)]
+    for dt, no, bt, bn, qty, day in docs:
+        recs.append(_fixed([(1, "C100"), (23, dt), (26, no.rjust(20, "0")), (46, day), (401, day)], 444))
+        line = [(1, "D110"), (23, dt), (26, no.rjust(20, "0")), (94, "לחם אחיד".encode("iso8859-8")),
+                (224, "+" + str(qty).rjust(12, "0") + "0000"), (241, "+" + "700".rjust(14, "0")), (297, day)]
+        if bt:
+            line += [(50, bt), (53, bn)]          # base number padded differently on purpose
+        recs.append(_fixed(line, 339))
+    total = len(recs) + 1
+    recs.append(_fixed([(1, "Z900"), (5, "000000099"), (46, str(total).rjust(15, "0"))], 110))
+    return b"\r\n".join(recs)
+
+
+def _bkmv_units(raw):
+    conv = main.bkmv_to_store_data(main.parse_bkmv(raw))
+    return sum(q for h in main.parse_sales_csv(conv["sales_csv"]).values() for _, q in h), conv
+
+
+def test_bkmv_base_document_fields_read_from_the_official_positions():
+    p = main.parse_bkmv(_bkmv_docs([("305", "77", "300", "55", 10, "20260602")]))
+    ln = p["lines"][0]
+    assert ln["base_doc_type"] == "300" and ln["base_doc_number"] == "55", ln
+    assert ln["sku"] == "" and ln["description"] == "לחם אחיד"     # neighbours unaffected
+
+
+def test_bkmv_transaction_invoice_then_tax_invoice_counts_once():
+    # 300 (transaction invoice) on the 1st, 305 (tax invoice) based on it on the 2nd
+    units, conv = _bkmv_units(_bkmv_docs([
+        ("300", "55", "", "", 10, "20260601"),
+        ("305", "77", "300", "55", 10, "20260602"),
+    ]))
+    assert units == 10, units                              # was 20 before
+    assert conv["superseded_documents"] == 1 and conv["superseded_lines_skipped"] == 1
+    sales = main.parse_sales_csv(conv["sales_csv"])
+    assert [d.day for h in sales.values() for d, _ in h] == [2]   # counted on the final document
+
+
+def test_bkmv_credit_note_on_an_invoice_does_not_erase_the_invoice():
+    # 320 sale of 10, then a 330 credit of 3 based on it: net 7, not -3
+    units, conv = _bkmv_units(_bkmv_docs([
+        ("320", "10", "", "", 10, "20260601"),
+        ("330", "11", "320", "10", 3, "20260603"),
+    ]))
+    assert units == 7 and conv["superseded_documents"] == 0, (units, conv)
+
+
+def test_bkmv_invoice_based_on_a_delivery_note_counts_once():
+    # 200 delivery notes are not sales lines; the 310 summary invoice is
+    units, conv = _bkmv_units(_bkmv_docs([
+        ("200", "1", "", "", 4, "20260601"),
+        ("200", "2", "", "", 6, "20260602"),
+        ("310", "90", "200", "1", 10, "20260603"),
+    ]))
+    assert units == 10 and conv["superseded_documents"] == 0, (units, conv)
+
+
+def test_bkmv_base_outside_this_file_changes_nothing():
+    # the 300 was in last month's export: the 305 is the only copy here
+    units, conv = _bkmv_units(_bkmv_docs([("305", "77", "300", "55", 10, "20260602")]))
+    assert units == 10 and conv["superseded_documents"] == 0 and conv["superseded_lines_skipped"] == 0
+
+
+def test_bkmv_import_summary_reports_superseded_documents():
+    sid = new_id()
+    raw = _bkmv_docs([("300", "55", "", "", 10, "20260601"), ("305", "77", "300", "55", 10, "20260602")])
+    r = C.post("/import/bkmv/" + sid + "?preview=1", data=raw, content_type="application/octet-stream")
+    assert r.status_code == 200 and r.json["superseded_documents"] == 1 and r.json["sale_lines_used"] == 1, r.json
+
+
 if __name__ == "__main__":
     fails = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
