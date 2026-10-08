@@ -19,6 +19,11 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 DATA = tempfile.mkdtemp(prefix="genius_test_")
 os.environ["GENIUS_DATA_DIR"] = DATA
+# Never the live database: DATABASE_URL is dropped, and Postgres is used only
+# through a database meant for tests (GENIUS_TEST_DATABASE_URL).
+os.environ.pop("DATABASE_URL", None)
+if os.environ.get("GENIUS_TEST_DATABASE_URL"):
+    os.environ["DATABASE_URL"] = os.environ["GENIUS_TEST_DATABASE_URL"]
 os.environ["ADMIN_TOKEN"] = "test-admin"
 os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test"
 os.environ["NEW_STORE_LIMIT_PER_HOUR"] = "100000"
@@ -28,6 +33,21 @@ for k in ("ANTHROPIC_API_KEY", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "STRIP
 import main  # noqa: E402
 
 C = main.app.test_client()
+
+
+def _fresh_env(data_dir):
+    """Environment for a test that boots main in a new process with its own,
+    empty storage: a new folder, and on Postgres a new database too."""
+    env = dict(os.environ, GENIUS_DATA_DIR=data_dir)
+    if main.USE_PG:
+        import psycopg
+        from urllib.parse import urlsplit, urlunsplit
+        name = "gx_t_%d_%d" % (os.getpid(), int(time.time() * 1000) % 10 ** 9)
+        u = urlsplit(main.DATABASE_URL)
+        with psycopg.connect(urlunsplit(u._replace(path="/postgres")), autocommit=True) as c:
+            c.execute("CREATE DATABASE " + name)
+        env["DATABASE_URL"] = urlunsplit(u._replace(path="/" + name))
+    return env
 ADMIN = {"X-Admin-Token": "test-admin"}
 _n = [0]
 
@@ -317,7 +337,7 @@ def test_migration_from_the_old_json_file():
                           "moved": os.path.exists(os.path.join(%r, "genius_db.json.migrated"))},
                          ensure_ascii=False))
     """ % (os.path.dirname(HERE), d))
-    env = dict(os.environ, GENIUS_DATA_DIR=d)
+    env = _fresh_env(d)
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=120)
     line = [l for l in out.stdout.splitlines() if l.startswith("{")][-1]
     got = json.loads(line)
@@ -1131,21 +1151,27 @@ def test_a_failed_lock_does_not_deadlock_every_later_writer():
     writer in the process blocked for ever.
     """
     import builtins
-    real_open = builtins.open
+    real_open, real_connect = builtins.open, main._connect
 
     def boom(path, *a, **k):
         if str(path) == main.DB_LOCKFILE:
             raise OSError("No space left on device")
         return real_open(path, *a, **k)
 
-    builtins.open = boom
+    def no_db():   # on Postgres the lock is taken over the database connection
+        raise OSError("could not connect to the database")
+
+    if main.USE_PG:
+        main._connect = no_db
+    else:
+        builtins.open = boom
     try:
         with main.db_lock():
             raise AssertionError("expected the lock to fail")
     except OSError:
         pass
     finally:
-        builtins.open = real_open
+        builtins.open, main._connect = real_open, real_connect
 
     done = []
     t = threading.Thread(target=lambda: (main.db_lock().__enter__(),
@@ -1384,7 +1410,7 @@ def test_restored_json_backup_is_migrated_even_after_demo_stores_exist():
     import subprocess, tempfile, shutil, json as _json
     d = tempfile.mkdtemp(prefix="gx_mig_")
     try:
-        env = dict(os.environ, GENIUS_DATA_DIR=d, ADMIN_TOKEN="t")
+        env = dict(_fresh_env(d), ADMIN_TOKEN="t")
         boot = [sys.executable, "-c",
                 "import sys;sys.path.insert(0,%r);import main;"
                 "print('STORES', sorted(main.load_db()['stores'].keys()))"
@@ -1405,6 +1431,8 @@ def test_restored_json_backup_is_migrated_even_after_demo_stores_exist():
 def test_backup_is_a_real_readable_copy_of_the_data():
     import datetime as _dt
     import sqlite3 as _sq
+    if main.USE_PG:
+        return   # Postgres: see test_postgres_backups_are_the_providers_and_say_so
     sid, h = _store_with_reorder()
     path = main.backup_database(day=_dt.date(2031, 1, 1))
     assert path and os.path.exists(path), path
@@ -1420,6 +1448,8 @@ def test_backup_is_a_real_readable_copy_of_the_data():
 def test_backup_is_once_a_day_and_old_ones_are_pruned():
     import datetime as _dt
     import shutil as _sh
+    if main.USE_PG:
+        return
     _sh.rmtree(main.BACKUP_DIR, ignore_errors=True)
     for n in range(1, 11):
         main.backup_database(keep=7, day=_dt.date(2030, 1, n))
@@ -1683,7 +1713,7 @@ def test_self_update_leaves_hand_edits_alone():
 
 def test_version_is_public_and_admin_sees_deploy_state():
     v = C.get("/version").json
-    assert set(v) == {"commit", "started_at", "auto_deploy"} and v["auto_deploy"] is False
+    assert set(v) == {"commit", "started_at", "auto_deploy", "storage"} and v["auto_deploy"] is False
     d = C.get("/admin/summary", headers=ADMIN).json["deploy"]
     assert d["enabled"] is False and "every_seconds" in d
 
@@ -1827,6 +1857,291 @@ def test_bkmv_import_summary_reports_superseded_documents():
     raw = _bkmv_docs([("300", "55", "", "", 10, "20260601"), ("305", "77", "300", "55", 10, "20260602")])
     r = C.post("/import/bkmv/" + sid + "?preview=1", data=raw, content_type="application/octet-stream")
     assert r.status_code == 200 and r.json["superseded_documents"] == 1 and r.json["sale_lines_used"] == 1, r.json
+
+
+
+# ---------------- Postgres (run with GENIUS_TEST_DATABASE_URL) ----------------
+
+def test_postgres_backups_are_the_providers_and_say_so():
+    if not main.USE_PG:
+        return
+    assert main.backup_database() is None and main.list_backups() == []
+    j = C.get("/admin/backups", headers=ADMIN).json
+    assert j["provider_managed"] is True and "ספק" in j["note"]
+
+
+def _sqlite_file_with(stores, recs=0):
+    """A real SQLite database file, laid out like the live one."""
+    import sqlite3 as _sq
+    d = tempfile.mkdtemp(prefix="gx_lite_")
+    path = os.path.join(d, "genius.db")
+    con = _sq.connect(path)
+    con.executescript(main._SCHEMA)
+    con.executemany("INSERT INTO stores VALUES (?, ?)",
+                    [(k, json.dumps(v, ensure_ascii=False)) for k, v in stores.items()])
+    con.execute("INSERT INTO suppliers VALUES (?, ?)", ("0521111111", json.dumps({"name": "תנובה"})))
+    con.execute("INSERT INTO kv VALUES (?, ?)", ("orders", json.dumps([{"id": "o1"}])))
+    con.executemany("INSERT INTO recommendations (store_id, json) VALUES (?, ?)",
+                    [("0527770001", json.dumps({"store_id": "0527770001", "n": i})) for i in range(recs)])
+    con.commit(); con.close()
+    return path
+
+
+def test_sqlite_to_postgres_copies_everything_once_and_leaves_sqlite_alone():
+    if not main.USE_PG:
+        return
+    import subprocess
+    lite = _sqlite_file_with({"0527770001": {"name": "מכולת דני", "sales_csv": "date,product,qty"},
+                              "0527770002": {"name": "מאפיית רונית"},
+                              "demo_bakery": {"name": "demo"}}, recs=3)
+    before = open(lite, "rb").read()
+    env = _fresh_env(os.path.dirname(lite))
+    code = ("import sys,json;sys.path.insert(0,%r);import main;"
+            "db=main.load_db();print('OUT',json.dumps({'s':sorted(db['stores'].ids()),'sup':list(db['suppliers']),"
+            "'orders':db['orders'],'recs':len([r for r in db['recommendations'] if r.get('store_id')=='0527770001']),"
+            "'m':main.STORAGE}, ensure_ascii=False))"
+            % os.path.dirname(HERE))
+    run = lambda: subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+    first = run()
+    got = json.loads([l for l in first.stdout.splitlines() if l.startswith("OUT ")][-1][4:])
+    assert {"0527770001", "0527770002"} <= set(got["s"]), got
+    assert got["sup"] == ["0521111111"] and got["orders"] == [{"id": "o1"}] and got["recs"] == 3, got
+    assert got["m"]["backend"] == "postgres" and "2 real stores" in (got["m"]["migration"] or ""), got["m"]
+    assert open(lite, "rb").read() == before          # the SQLite file was only read
+    # second boot: Postgres has real stores now, so nothing is copied again
+    second = json.loads([l for l in run().stdout.splitlines() if l.startswith("OUT ")][-1][4:])
+    assert second["m"]["migration"] is None and second["recs"] == 3, second
+
+
+def test_sqlite_to_postgres_never_overwrites_postgres_data():
+    if not main.USE_PG:
+        return
+    sid = new_id()
+    upload(sid, daily_csv())                 # Postgres already has a real store
+    lite = _sqlite_file_with({sid: {"name": "OLD COPY — must not win"}})
+    assert main.migrate_sqlite_to_pg(lite) is None
+    assert main.load_db()["stores"][sid].get("name") != "OLD COPY — must not win"
+
+
+def test_postgres_connection_dropped_by_the_server_is_reopened():
+    # Neon suspends an idle database after 5 minutes and drops connections
+    if not main.USE_PG:
+        return
+    import psycopg
+    conn = main._connect()
+    pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+    with psycopg.connect(main.DATABASE_URL, autocommit=True) as admin:
+        admin.execute("SELECT pg_terminate_backend(%s)", (pid,))
+    time.sleep(0.3)
+    assert conn.execute("SELECT 1").fetchone()[0] == 1            # reconnected
+    assert conn.execute("SELECT pg_backend_pid()").fetchone()[0] != pid
+    sid = new_id()
+    tok = upload(sid, daily_csv()).json["store_token"]            # and the app still works
+    assert C.get("/store/" + sid, headers={"X-Store-Token": tok}).status_code == 200
+
+
+def test_postgres_drop_inside_a_transaction_is_not_retried_halfway():
+    if not main.USE_PG:
+        return
+    import psycopg
+    conn = main._connect()
+    conn.execute("BEGIN")
+    conn.execute("INSERT INTO kv (key, json) VALUES ('half', '1') ON CONFLICT(key) DO NOTHING")
+    pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+    with psycopg.connect(main.DATABASE_URL, autocommit=True) as admin:
+        admin.execute("SELECT pg_terminate_backend(%s)", (pid,))
+    time.sleep(0.3)
+    try:
+        conn.execute("INSERT INTO kv (key, json) VALUES ('half2', '1')")
+        raise AssertionError("a statement inside a broken transaction must fail, not run alone")
+    except psycopg.OperationalError:
+        pass
+    conn.execute("ROLLBACK")                          # tolerated on a dead connection
+    assert conn.execute("SELECT COUNT(*) FROM kv WHERE key IN ('half','half2')").fetchone()[0] == 0
+
+
+def test_postgres_lock_holds_across_connections():
+    # two app instances (autoscale) must wait for each other like two threads
+    if not main.USE_PG:
+        return
+    import psycopg
+    with main.db_lock():
+        with psycopg.connect(main.DATABASE_URL, autocommit=True) as other:
+            got = other.execute("SELECT pg_try_advisory_lock(%s)", (main.PG_LOCK_KEY,)).fetchone()[0]
+            assert got is False, "another instance could take the lock while it was held"
+    with psycopg.connect(main.DATABASE_URL, autocommit=True) as other:
+        assert other.execute("SELECT pg_try_advisory_lock(%s)", (main.PG_LOCK_KEY,)).fetchone()[0] is True
+        other.execute("SELECT pg_advisory_unlock(%s)", (main.PG_LOCK_KEY,))
+
+
+def test_tests_never_touch_the_live_database():
+    # a mistaken run of the suite on the server must not write into production
+    import subprocess
+    env = dict(os.environ, DATABASE_URL="postgresql://live-db.invalid/prod")
+    env.pop("GENIUS_TEST_DATABASE_URL", None)
+    code = ("import os,sys;sys.argv=['x'];sys.path.insert(0,%r);"
+            "p=%r;src=open(p,encoding='utf-8').read().split('import main')[0];exec(src,{'__file__':p,'__name__':'x'});"
+            "print('URL', os.environ.get('DATABASE_URL'))" % (HERE, os.path.join(HERE, "test_audit.py")))
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
+    assert "URL None" in out.stdout, out.stdout[-300:] + out.stderr[-300:]
+    assert "DATABASE_URL" in main.APP_ENV_KEYS          # and update candidates don't get it either
+
+
+
+def test_sqlite_copy_never_runs_twice_even_after_every_store_is_deleted():
+    # review 2026-10-08: no marker meant every restart with 0 real stores in
+    # Postgres re-imported the old file — deleted stores came back
+    if not main.USE_PG:
+        return
+    import subprocess
+    lite = _sqlite_file_with({"0527880001": {"name": "חנות שנמחקה"}})
+    env = _fresh_env(os.path.dirname(lite))
+    boot = ("import sys,json;sys.path.insert(0,%r);import main;db=main.load_db();"
+            "%s;print('OUT',json.dumps({'s':sorted(db['stores'].ids()),'m':main.STORAGE['migration']}))")
+    run = lambda extra: json.loads([l for l in subprocess.run(
+        [sys.executable, "-c", boot % (os.path.dirname(HERE), extra)], env=env, capture_output=True,
+        text=True, timeout=120).stdout.splitlines() if l.startswith("OUT ")][-1][4:])
+    first = run("del db['stores']['0527880001'];main.save_db(db)")
+    assert first["m"] and "1 real stores" in first["m"], first
+    second = run("pass")                                   # e.g. the next auto-deploy restart
+    assert second["m"] is None and "0527880001" not in second["s"], second
+
+
+def test_sqlite_copy_waiting_on_the_lock_does_not_overwrite_newer_data():
+    # review 2026-10-08: two instances booting together — the late one checked
+    # "no real store yet", then waited for the lock, then upserted old rows
+    # over a customer's newer edit
+    if not main.USE_PG:
+        return
+    import psycopg, subprocess
+    sid = "0527990001"
+    lite = _sqlite_file_with({sid: {"name": "v1"}})
+    env = _fresh_env(tempfile.mkdtemp())          # fresh database, folder without genius.db
+    sig = tempfile.mkdtemp()
+    ready, go = os.path.join(sig, "ready"), os.path.join(sig, "go")
+    # instance A: boots fully first, then (on our signal) runs the copy
+    code = ("import sys,os,time;sys.path.insert(0,%r);import main;open(%r,'w').close();"
+            "[time.sleep(0.05) for _ in iter(lambda: os.path.exists(%r), True)];"
+            "print('R',main.migrate_sqlite_to_pg(%r),flush=True)" % (os.path.dirname(HERE), ready, go, lite))
+    a = subprocess.Popen([sys.executable, "-c", code], env=env, stdout=subprocess.PIPE, text=True)
+    for _ in range(600):
+        if os.path.exists(ready) or a.poll() is not None:
+            break
+        time.sleep(0.1)
+    assert os.path.exists(ready) and a.poll() is None, "instance A did not start: " + (a.communicate()[0] or "")[-300:]
+    with psycopg.connect(env["DATABASE_URL"], autocommit=True) as b:      # instance B
+        b.execute("SELECT pg_advisory_lock(%s)", (main.PG_LOCK_KEY,))
+        open(go, "w").close()
+        time.sleep(3)                     # A reads SQLite and reaches the lock meanwhile
+        b.execute("INSERT INTO stores VALUES (%s, %s)", (sid, json.dumps({"name": "v2 — edited"})))
+        b.execute("SELECT pg_advisory_unlock(%s)", (main.PG_LOCK_KEY,))
+        out = a.communicate(timeout=120)[0]
+        assert "R None" in out, out[-300:]
+        got = json.loads(b.execute("SELECT json FROM stores WHERE id=%s", (sid,)).fetchone()[0])
+        assert got["name"] == "v2 — edited", got
+
+
+def test_postgres_lock_lost_mid_write_fails_and_then_recovers():
+    # review 2026-10-08: a reconnect inside db_lock() used to carry on without
+    # the lock; now the write fails, and the next request works normally
+    if not main.USE_PG:
+        return
+    import psycopg
+    with psycopg.connect(main.DATABASE_URL, autocommit=True) as admin:
+        sid = new_id()
+        try:
+            with main.db_lock():
+                db = main.load_db()
+                admin.execute("SELECT pg_terminate_backend(%s)", (main._connect()._c.info.backend_pid,))
+                time.sleep(0.3)
+                db["stores"][sid] = {"name": "written without the lock"}
+                main.save_db(db)
+            raise AssertionError("save_db carried on after losing the lock")
+        except psycopg.OperationalError:
+            pass
+        assert getattr(main._lock_state, "depth", 0) == 0
+        assert sid not in main.load_db()["stores"].ids()
+        # nobody is left holding the lock, and the app works again
+        assert admin.execute("SELECT pg_try_advisory_lock(%s)", (main.PG_LOCK_KEY,)).fetchone()[0] is True
+        admin.execute("SELECT pg_advisory_unlock(%s)", (main.PG_LOCK_KEY,))
+        sid2 = new_id()
+        tok = upload(sid2, daily_csv()).json["store_token"]
+        assert C.get("/store/" + sid2, headers={"X-Store-Token": tok}).status_code == 200
+
+
+def test_postgres_connections_are_reused_across_requests():
+    # review 2026-10-08: every request thread opened its own connection
+    # (TLS + login on Neon each time) — count connections OPENED, not left
+    if not main.USE_PG:
+        return
+    opened = [0]
+    real_init = main._PgConn.__init__
+
+    def counting(self, url):
+        opened[0] += 1
+        real_init(self, url)
+    main._PgConn.__init__ = counting
+    try:
+        for _ in range(40):                    # one after another, each on its own thread
+            t = threading.Thread(target=lambda: C.get("/stores"))
+            t.start(); t.join()
+    finally:
+        main._PgConn.__init__ = real_init
+    assert opened[0] <= 1, "%d connections opened for 40 requests" % opened[0]
+
+
+def test_boot_refuses_to_serve_when_the_copy_fails():
+    # review 2026-10-08: serving on an empty Postgres after a failed copy let the
+    # first signup create a real store, and the old data was then never copied
+    import subprocess
+    lite = _sqlite_file_with({"0527660001": {"name": "x"}})
+    env = dict(os.environ, GENIUS_DATA_DIR=os.path.dirname(lite),
+               DATABASE_URL="postgresql://genius@127.0.0.1:1/nowhere?connect_timeout=1")
+    out = subprocess.run([sys.executable, "-c", "import sys;sys.path.insert(0,%r);import main" % os.path.dirname(HERE)],
+                         env=env, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 3 and "NOT STARTING" in out.stdout, (out.returncode, out.stdout[-300:])
+
+
+
+def _boot(env):
+    import subprocess
+    return subprocess.run([sys.executable, "-c", "import sys;sys.path.insert(0,%r);import main;print('SERVING')"
+                           % os.path.dirname(HERE)], env=env, capture_output=True, text=True, timeout=180)
+
+
+def test_after_the_copy_a_restart_does_not_need_postgres_to_be_up():
+    # review 2026-10-08 (round 2): genius.db stays on disk for good, so every
+    # auto-deploy restart re-checked Postgres and refused to start if Neon was
+    # slow — long after the copy had been done
+    if not main.USE_PG:
+        return
+    lite = _sqlite_file_with({"0527550001": {"name": "x"}})
+    env = _fresh_env(os.path.dirname(lite))
+    first = _boot(env)
+    assert "SERVING" in first.stdout and os.path.exists(lite + ".copied-to-postgres"), first.stdout[-300:]
+    down = dict(env, DATABASE_URL="postgresql://genius@127.0.0.1:1/nowhere?connect_timeout=1")
+    second = _boot(down)
+    assert second.returncode == 0 and "NOT STARTING" not in second.stdout, second.stdout[-300:]
+
+
+def test_a_corrupt_sqlite_file_does_not_stop_a_healthy_postgres_server():
+    if not main.USE_PG:
+        return
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, "genius.db"), "w") as f:
+        f.write("garbage, not a database")
+    out = _boot(_fresh_env(d))
+    assert out.returncode == 0 and "SERVING" in out.stdout and "could not be read" in out.stdout, out.stdout[-300:]
+
+
+def test_neon_pooler_rewrite_touches_only_the_host():
+    f = main._neon_direct
+    assert f("postgresql://o:my-pooler.pw@ep-a-1-pooler.eu-central-1.aws.neon.tech/db?sslmode=require") == \
+        "postgresql://o:my-pooler.pw@ep-a-1.eu-central-1.aws.neon.tech/db?sslmode=require"
+    assert f("postgresql://o:p@EP-A-1-POOLER.eu-central-1.aws.neon.tech/db") == \
+        "postgresql://o:p@ep-a-1.eu-central-1.aws.neon.tech/db"     # host names are case-insensitive
+    assert f("postgresql://u:p@db-pooler.example.com/x") == "postgresql://u:p@db-pooler.example.com/x"
+    assert f("postgresql://u:p@ep-x.us-east-2.aws.neon.tech/db") == "postgresql://u:p@ep-x.us-east-2.aws.neon.tech/db"
 
 
 if __name__ == "__main__":

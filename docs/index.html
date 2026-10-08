@@ -1877,6 +1877,11 @@ async function gxAdminBackups(post) {
     return;
   }
   const d = r.data || {}, list = d.backups || [];
+  if (d.provider_managed) {
+    box.innerHTML = '<div class="net-card"><div class="net-row"><span class="pill b"><span class="dot"></span>אצל ספק מסד הנתונים</span></div>' +
+      '<div class="net-sub" style="margin-top:8px;font-size:11px">' + gxEsc(d.note || '') + '</div></div>';
+    return;
+  }
   const ageH = list.length ? (Date.now() - new Date(list[0].created).getTime()) / 36e5 : null;
   // the nightly job runs at 03:00; more than a day and a half means it missed
   const late = ageH == null || !(ageH < 36);

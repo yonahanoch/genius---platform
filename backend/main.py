@@ -83,6 +83,40 @@ DB_BACKUP = DB_FILE + ".bak"
 DB_LOCKFILE = DB_FILE + ".lock"
 ADMIN_TOKEN_FILE = os.path.join(DATA_DIR, ".admin_token")
 
+# Postgres when DATABASE_URL is set (e.g. Neon), SQLite otherwise. A published
+# app's disk is wiped on every publish (Replit docs: "The file system in
+# published apps is not persistent"), so any always-on host needs the data
+# outside the app. Without the variable nothing changes.
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+PG_LOCK_KEY = 7246190          # advisory lock id for db_lock(); any constant
+PG_SCHEMA_LOCK_KEY = PG_LOCK_KEY + 1
+
+
+def _neon_direct(url):
+    """
+    db_lock() is a session-level advisory lock; through Neon's pooler the lock
+    and the unlock can land on different server sessions (Neon's docs: not
+    supported there), and a stuck lock freezes every write. Neon's direct
+    endpoint is the same host without "-pooler". Only the HOST is rewritten,
+    and only on neon.tech — a password containing "-pooler." stays intact.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+    u = urlsplit(url)
+    host = u.hostname or ""
+    if not (host.endswith(".neon.tech") and "-pooler." in host):
+        return url
+    at = u.netloc.lower().rfind(host)          # hostname comes back lower-cased
+    if at < 0:
+        return url
+    netloc = u.netloc[:at] + host.replace("-pooler.", ".", 1) + u.netloc[at + len(host):]
+    return urlunsplit(u._replace(netloc=netloc))
+
+
+if USE_PG and _neon_direct(DATABASE_URL) != DATABASE_URL:
+    DATABASE_URL = _neon_direct(DATABASE_URL)
+    print("ℹ️  DATABASE_URL: using Neon's direct endpoint instead of the pooler (locks need one session)")
+
 
 def _load_admin_token():
     """
@@ -140,7 +174,11 @@ class _DbLock:
         DB_LOCK.acquire()
         depth = getattr(_lock_state, "depth", 0)
         try:
-            if depth == 0 and fcntl is not None:
+            if depth == 0 and USE_PG:
+                # across processes AND machines: a second instance of an
+                # autoscaled app waits here like a second thread does
+                _connect().execute("SELECT pg_advisory_lock(%d)" % PG_LOCK_KEY)
+            elif depth == 0 and fcntl is not None:
                 os.makedirs(DATA_DIR, exist_ok=True)
                 _lock_state.fh = open(DB_LOCKFILE, "a")
                 fcntl.flock(_lock_state.fh, fcntl.LOCK_EX)
@@ -162,7 +200,12 @@ class _DbLock:
 
     def __exit__(self, *exc):
         _lock_state.depth -= 1
-        if _lock_state.depth == 0 and fcntl is not None and getattr(_lock_state, "fh", None):
+        if _lock_state.depth == 0 and USE_PG:
+            try:
+                _connect().execute("SELECT pg_advisory_unlock(%d)" % PG_LOCK_KEY)
+            except Exception:   # noqa: BLE001 — a dropped connection already released it
+                pass
+        elif _lock_state.depth == 0 and fcntl is not None and getattr(_lock_state, "fh", None):
             fcntl.flock(_lock_state.fh, fcntl.LOCK_UN)
             _lock_state.fh.close()
             _lock_state.fh = None
@@ -189,8 +232,8 @@ def backup_database(keep=None, day=None):
     Returns the path written, or None when today's snapshot already exists.
     """
     keep = BACKUP_KEEP if keep is None else keep
-    if not os.path.exists(SQLITE_FILE):
-        return None
+    if USE_PG or not os.path.exists(SQLITE_FILE):
+        return None          # on Postgres, backups are the database provider's
     os.makedirs(BACKUP_DIR, exist_ok=True)
     stamp = (day or datetime.now().date()).isoformat()
     path = os.path.join(BACKUP_DIR, "genius-%s.db" % stamp)
@@ -234,23 +277,164 @@ def list_backups():
     return out
 
 
-def _connect():
-    """One connection per thread, with write-ahead logging."""
+_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS stores (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS recommendations (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, store_id TEXT, json TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, json TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS recs_by_store ON recommendations(store_id);
+"""
+_PG_SCHEMA_LOCK = threading.Lock()
+_pg_schema_ready = False
+
+
+class _PgConn:
+    """
+    The small part of sqlite3's connection API this file uses, on Postgres:
+    execute / executemany / executescript, "?" placeholders, explicit
+    BEGIN/COMMIT. Autocommit outside an explicit transaction, like the SQLite
+    connection (isolation_level=None).
+
+    Neon suspends an idle database after 5 minutes and drops connections, so a
+    statement that fails on a dead connection is retried once on a fresh one —
+    but never in the middle of a transaction, where a retry would split it.
+    """
+
+    def __init__(self, url):
+        import psycopg
+        self._psycopg = psycopg
+        self._url = url
+        self._c = None
+        self._in_tx = False
+        self._open()
+
+    def _open(self):
+        if self._c is not None:
+            try:
+                self._c.close()
+            except Exception:   # noqa: BLE001
+                pass
+        self._c = self._psycopg.connect(self._url, autocommit=True, connect_timeout=20,
+                                        keepalives=1, keepalives_idle=30,
+                                        keepalives_interval=10, keepalives_count=3)
+        # a lock held by a vanished instance must not freeze every write for hours
+        self._c.execute("SET lock_timeout = '30s'")
+
+    @staticmethod
+    def _sql(q):
+        return q.replace("BEGIN IMMEDIATE", "BEGIN").replace("?", "%s")
+
+    def execute(self, q, params=None):
+        q2 = self._sql(q)
+        head = q2.lstrip().split(None, 1)[0].upper() if q2.strip() else ""
+        for attempt in (0, 1):
+            try:
+                cur = self._c.cursor()
+                cur.execute(q2, params if params else None)
+                break
+            except (self._psycopg.errors.LockNotAvailable, self._psycopg.errors.QueryCanceled):
+                raise        # lock_timeout fired: retrying on a new connection would double the wait
+            except self._psycopg.OperationalError:
+                # The advisory lock lives on this connection. Reconnecting while
+                # db_lock() is held would carry on WITHOUT the lock, and another
+                # instance could write in between — fail the request instead.
+                holding = getattr(_lock_state, "depth", 0) > 0 and "pg_advisory_unlock" not in q2
+                if self._in_tx or attempt or holding or head in ("COMMIT", "ROLLBACK"):
+                    if head == "ROLLBACK":
+                        self._in_tx = False
+                        return None
+                    raise
+                self._open()
+        if head == "BEGIN":
+            self._in_tx = True
+        elif head in ("COMMIT", "ROLLBACK"):
+            self._in_tx = False
+        return cur
+
+    def executemany(self, q, seq):
+        seq = list(seq)
+        if seq:
+            with self._c.cursor() as cur:
+                cur.executemany(self._sql(q), seq)
+
+    def executescript(self, script):
+        for stmt in script.split(";"):
+            if stmt.strip():
+                self.execute(stmt)
+
+    def close(self):
+        self._c.close()
+
+
+_PG_POOL = []                  # idle Postgres connections, reused across request threads
+_PG_POOL_LOCK = threading.Lock()
+PG_POOL_MAX = 8
+
+
+def _ensure_pg_schema(conn):
+    """CREATE IF NOT EXISTS races between processes in Postgres (UniqueViolation
+    on pg_type), so the schema is created under a cross-process lock."""
+    global _pg_schema_ready
+    with _PG_SCHEMA_LOCK:
+        if _pg_schema_ready:
+            return
+        conn.execute("BEGIN")
+        try:
+            conn.execute("SELECT pg_advisory_xact_lock(%d)" % PG_SCHEMA_LOCK_KEY)
+            conn.executescript(_SCHEMA.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY"))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        _pg_schema_ready = True
+
+
+def _release_pg_conn():
+    """Give this thread's connection back to the pool (end of a request). The
+    web server starts a thread per request; without this every request opened
+    a new connection — a TLS handshake and login on Neon each time."""
     conn = getattr(_conn_state, "conn", None)
+    if conn is None or not USE_PG or getattr(_lock_state, "depth", 0) > 0:
+        return
+    _conn_state.conn = None
+    if conn._in_tx:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:   # noqa: BLE001
+            pass
+    with _PG_POOL_LOCK:
+        if len(_PG_POOL) < PG_POOL_MAX:
+            _PG_POOL.append(conn)
+            return
+    try:
+        conn.close()
+    except Exception:   # noqa: BLE001
+        pass
+
+
+@app.teardown_request
+def _pg_conn_back_to_pool(exc):
+    _release_pg_conn()
+
+
+def _connect():
+    """One connection per thread: Postgres if DATABASE_URL is set, else SQLite (WAL)."""
+    conn = getattr(_conn_state, "conn", None)
+    if conn is None and USE_PG:
+        with _PG_POOL_LOCK:
+            conn = _PG_POOL.pop() if _PG_POOL else None
+        if conn is None:
+            conn = _PgConn(DATABASE_URL)
+        _ensure_pg_schema(conn)
+        _conn_state.conn = conn
     if conn is None:
         os.makedirs(DATA_DIR, exist_ok=True)
         conn = sqlite3.connect(SQLITE_FILE, timeout=30, isolation_level=None)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=30000")
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS stores (id TEXT PRIMARY KEY, json TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS recommendations (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT, store_id TEXT, json TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, json TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, json TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS recs_by_store ON recommendations(store_id);
-        """)
+        conn.executescript(_SCHEMA)
         _conn_state.conn = conn
     return conn
 
@@ -314,6 +498,10 @@ class _Stores(collections.abc.MutableMapping):
         self._deleted.add(key)
 
     def flush(self, conn):
+        """Writes changed rows; returns what to mark as saved once the
+        transaction commits (marking earlier would make a retry after a failed
+        commit skip the edit)."""
+        written = []
         for key in self._deleted:
             conn.execute("DELETE FROM stores WHERE id=?", (key,))
             conn.execute("DELETE FROM recommendations WHERE store_id=?", (key,))
@@ -322,7 +510,12 @@ class _Stores(collections.abc.MutableMapping):
             if self._original.get(key) != raw:
                 conn.execute("INSERT INTO stores (id, json) VALUES (?, ?) "
                              "ON CONFLICT(id) DO UPDATE SET json=excluded.json", (key, raw))
-                self._original[key] = raw
+                written.append((key, raw))
+        return written
+
+    def committed(self, written):
+        for key, raw in written:
+            self._original[key] = raw
         self._deleted.clear()
 
 
@@ -357,10 +550,11 @@ def save_db(db):
     conn = _connect()
     with db_lock():
         conn.execute("BEGIN IMMEDIATE")
+        written = None
         try:
             stores = db.get("stores")
             if isinstance(stores, _Stores):
-                stores.flush(conn)
+                written = stores.flush(conn)
             elif isinstance(stores, dict):          # a plain dict (tests, seeding)
                 for key, store in stores.items():
                     conn.execute("INSERT INTO stores (id, json) VALUES (?, ?) "
@@ -395,6 +589,119 @@ def save_db(db):
         except Exception:
             conn.execute("ROLLBACK")
             raise
+        if written is not None:
+            db["stores"].committed(written)
+
+
+MIGRATION_MARK = "migrated_from_sqlite"
+STORAGE = {"backend": "postgres" if USE_PG else "sqlite", "migration": None,
+           "migration_error": None, "warning": None}
+
+
+class MigrationUnknown(Exception):
+    """SQLite holds real stores and it could not be established whether they
+    are already in Postgres — the one case where serving would be unsafe."""
+
+
+def _local_mark(src):
+    return src + ".copied-to-postgres"
+
+
+def migrate_sqlite_to_pg(sqlite_path=None):
+    """
+    First boot on Postgres: copy an existing SQLite database over, so moving
+    host loses nothing. The SQLite file is only read, and stays as a backup.
+
+    Decided once and remembered twice: a marker row in Postgres (written in the
+    same transaction as the copy) and a marker file next to the SQLite file.
+    With the file present, later boots don't touch Postgres here at all — so
+    an auto-deploy restart while Neon is slow still starts. The Postgres
+    marker and "Postgres has no real store yet" are checked under the
+    cross-instance lock, inside the copy's transaction, so a restart never
+    re-imports old rows and two instances booting together can't both copy.
+    Existing Postgres rows are never overwritten.
+
+    Returns a short report, or None when there was nothing to do. Raises
+    MigrationUnknown only when SQLite has real stores and Postgres can't be
+    asked whether they were copied.
+    """
+    if not USE_PG:
+        return None
+    src = sqlite_path or SQLITE_FILE
+    if not os.path.exists(src) or os.path.exists(_local_mark(src)):
+        return None
+    try:
+        lite = sqlite3.connect("file:%s?mode=ro" % src, uri=True)
+        try:
+            tables = {r[0] for r in lite.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "stores" not in tables:
+                return None
+            real = lite.execute("SELECT COUNT(*) FROM stores WHERE id NOT LIKE 'demo_%'").fetchone()[0]
+            if not real:
+                return None
+            rows = {t: lite.execute("SELECT * FROM %s" % t).fetchall()
+                    for t in ("stores", "suppliers", "kv") if t in tables}
+            recs = (lite.execute("SELECT store_id, json FROM recommendations "
+                                 "WHERE store_id NOT LIKE 'demo_%' ORDER BY seq").fetchall()
+                    if "recommendations" in tables else [])
+        finally:
+            lite.close()
+    except sqlite3.DatabaseError as e:
+        # unreadable file: there is nothing we could copy anyway — don't let it
+        # stop a healthy Postgres server from starting
+        STORAGE["warning"] = "genius.db could not be read (%s) — nothing copied" % str(e)[:120]
+        print("! " + STORAGE["warning"])
+        return None
+
+    try:
+        pg = _connect()
+        with db_lock():
+            pg.execute("BEGIN")
+            try:
+                done = pg.execute("SELECT json FROM kv WHERE key=?", (MIGRATION_MARK,)).fetchone()
+                has_real = pg.execute("SELECT COUNT(*) FROM stores WHERE id NOT LIKE 'demo_%'").fetchone()[0]
+                if done or has_real:
+                    pg.execute("ROLLBACK")
+                    report = None
+                    why = ("already copied" if done else
+                           "Postgres already had real stores — the SQLite copy was NOT merged in")
+                else:
+                    pg.executemany("INSERT INTO stores (id, json) VALUES (?, ?) ON CONFLICT(id) DO NOTHING",
+                                   rows.get("stores", []))
+                    pg.executemany("INSERT INTO suppliers (id, json) VALUES (?, ?) ON CONFLICT(id) DO NOTHING",
+                                   rows.get("suppliers", []))
+                    # Postgres holds no real store yet (checked under the lock), so
+                    # its kv rows are only this boot's housekeeping: SQLite wins
+                    pg.executemany("INSERT INTO kv (key, json) VALUES (?, ?) ON CONFLICT(key) "
+                                   "DO UPDATE SET json=excluded.json",
+                                   [r for r in rows.get("kv", []) if r[0] != MIGRATION_MARK])
+                    pg.executemany("INSERT INTO recommendations (store_id, json) VALUES (?, ?)", recs)
+                    got = pg.execute("SELECT COUNT(*) FROM stores WHERE id NOT LIKE 'demo_%'").fetchone()[0]
+                    if got != real:
+                        raise RuntimeError("copied %d real stores, expected %d" % (got, real))
+                    report = "%d real stores, %d suppliers, %d recommendations copied from %s" % (
+                        real, len(rows.get("suppliers", [])), len(recs), os.path.basename(src))
+                    why = report
+                    pg.execute("INSERT INTO kv (key, json) VALUES (?, ?)", (MIGRATION_MARK, json.dumps(
+                        {"at": datetime.now().isoformat(timespec="seconds"), "report": report})))
+                    pg.execute("COMMIT")
+            except Exception:
+                pg.execute("ROLLBACK")
+                raise
+    except Exception as e:   # noqa: BLE001
+        raise MigrationUnknown(str(e)[:300])
+
+    try:
+        with open(_local_mark(src), "w", encoding="utf-8") as f:
+            f.write("%s %s\n" % (datetime.now().isoformat(timespec="seconds"), why))
+    except OSError:
+        pass                    # read-only disk: Postgres' own marker still holds
+    if report:
+        print("✓ SQLite → Postgres: " + report)
+    elif "NOT merged" in why:
+        STORAGE["warning"] = why
+        print("! " + why)
+    return report
 
 
 def migrate_json_to_sqlite():
@@ -1414,7 +1721,9 @@ def admin_backups():
         "keep_days": BACKUP_KEEP,
         "made_now": made,
         "directory": BACKUP_DIR,
-        "note": "גיבוי יומי על אותו דיסק. מגן מפני קובץ פגום, לא מפני אובדן השרת.",
+        "provider_managed": USE_PG,
+        "note": ("המידע ב-Postgres — הגיבויים והשחזור אצל ספק מסד הנתונים, לא בשרת." if USE_PG else
+                 "גיבוי יומי על אותו דיסק. מגן מפני קובץ פגום, לא מפני אובדן השרת."),
     })
 
 
@@ -1488,6 +1797,7 @@ def admin_summary():
         },
         "proxy": proxy_health(),
         "deploy": deploy_status(),
+        "storage": STORAGE,
         "generated_at": datetime.now().isoformat(),
     })
 
@@ -1820,9 +2130,13 @@ STARTUP_COMMIT = _commit()
 # Replit PROXY_HOPS=3 is set, and the suite's "untrusted by default" test
 # failed there, which would have blocked every update (found 2026-10-02 by
 # running the suite on the live host before switching this on).
-APP_ENV_KEYS = {"ADMIN_TOKEN", "ANTHROPIC_API_KEY", "AUTO_DEPLOY", "LENDING_SHOW_AMOUNT",
+# DATABASE_URL above all: a candidate's test suite must never run against
+# the live database — it would write hundreds of test stores into it.
+APP_ENV_KEYS = {"ADMIN_TOKEN", "ANTHROPIC_API_KEY", "AUTO_DEPLOY", "DATABASE_URL", "LENDING_SHOW_AMOUNT",
                 "NEW_STORE_LIMIT_PER_HOUR", "ONBOARD_DAILY_CAP", "PROXY_HOPS", "PUBLIC_URL", "REPLIT_URL"}
-APP_ENV_PREFIXES = ("GENIUS_", "CHAT_", "STRIPE_", "TWILIO_", "GX_")
+# PG*: libpq reads PGHOST/PGPASSWORD on its own, and Replit's built-in
+# Postgres sets them — a candidate test connecting "by default" would reach it
+APP_ENV_PREFIXES = ("GENIUS_", "CHAT_", "STRIPE_", "TWILIO_", "GX_", "PG")
 
 
 def _test_env():
@@ -1954,7 +2268,7 @@ def version():
     """Which commit is live. Public on purpose: it is how a deploy is checked
     from outside, and a commit hash of a public repo reveals nothing."""
     return jsonify({"commit": (STARTUP_COMMIT or "")[:7] or None, "started_at": STARTED_AT,
-                    "auto_deploy": AUTO_DEPLOY})
+                    "auto_deploy": AUTO_DEPLOY, "storage": "postgres" if USE_PG else "sqlite"})
 
 
 # ── הפעלה ──
@@ -5153,6 +5467,30 @@ def list_stores():
     out.sort(key=lambda x: (x["demo"], x["name"]))
     return jsonify({"stores": out, "count": len(out)})
 
+
+STORAGE.update(backend="postgres" if USE_PG else "sqlite")
+if USE_PG:
+    # Loud on purpose: if this fails and new stores are then created in the
+    # empty Postgres, the old data would never be copied (the copy only runs
+    # while Postgres has no real store). The admin dashboard shows it too.
+    # Neon may be waking from suspend: retry a few times. If it still fails,
+    # refuse to serve: running on an empty Postgres would let the first signup
+    # create a real store, after which the old data would never be copied.
+    for _attempt in range(4):
+        try:
+            STORAGE["migration"] = migrate_sqlite_to_pg()
+            STORAGE["migration_error"] = None
+            break
+        except MigrationUnknown as _e:
+            STORAGE["migration_error"] = str(_e)[:300]
+            print("! SQLite → Postgres copy failed (attempt %d): %s" % (_attempt + 1, _e), flush=True)
+            if _attempt < 3:
+                time.sleep(2 * (_attempt + 1))
+    if STORAGE["migration_error"]:
+        print("!" * 60 + "\n! NOT STARTING: the SQLite data could not be copied to Postgres.\n"
+              "! Fix DATABASE_URL (or remove it to keep running on SQLite) and restart.\n" + "!" * 60,
+              flush=True)
+        raise SystemExit(3)
 
 # refresh demo stores once at startup (idempotent; real stores untouched)
 try:
