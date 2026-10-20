@@ -1298,13 +1298,19 @@ function bulkNextTier(total) {
   return null;
 }
 
+// One text, shown wherever a store can join, saying exactly what other
+// stores see. The suggested price for surplus stock used to go unmentioned.
+const GX_NET_DISCLOSURE = 'מה רואות חנויות אחרות ברשת: שם החנות, שם המוצר, הכמות בהתאמה ' +
+  '(כמה עודף יש לך או כמה אתה צריך להזמין), ומחיר מוצע לעודפים. ' +
+  'הן לא רואות את המכירות, את מחירי המדף או את הטלפון שלך — הטלפון נמסר רק אחרי ששתי החנויות מאשרות יצירת קשר.';
+
 async function gxNetworkJoinCard() {
   const id = gxStore();
   if (!gxIsMine(id)) return '';
   let st;
   try { st = await gxLoadStore(false); } catch (e) { return ''; }
   if (st.network_opt_in) {
-    return '<div class="net-card"><div class="net-sub">החנות שלך משתתפת ברשת. חנויות אחרות ברשת רואות את שם החנות ואת המוצרים בהתאמה — לא את המכירות שלך. ' +
+    return '<div class="net-card"><div class="net-sub">החנות שלך משתתפת ברשת. ' + GX_NET_DISCLOSURE + ' ' +
       '<button class="btn" onclick="gxSetNetwork(false)">הפסק השתתפות</button></div></div>';
   }
   if (!st.has_phone) {
@@ -1314,8 +1320,7 @@ async function gxNetworkJoinCard() {
   }
   const phoneField = '';
   return '<div class="net-card"><div class="net-title">החנות שלך עוד לא ברשת</div>' +
-    '<div class="net-sub">הצטרפות מאפשרת התאמות העברת מלאי וקנייה משותפת עם חנויות אחרות. ' +
-    'יוצגו להן שם החנות, המוצר והכמות בהתאמה. הטלפון נמסר רק אחרי ששתי החנויות מאשרות יצירת קשר.</div>' +
+    '<div class="net-sub">הצטרפות מאפשרת התאמות העברת מלאי וקנייה משותפת עם חנויות אחרות. ' + GX_NET_DISCLOSURE + '</div>' +
     phoneField +
     '<div class="net-row"><button class="btn btnp" onclick="gxSetNetwork(true)">הצטרף לרשת</button></div></div>';
 }
@@ -1571,6 +1576,7 @@ async function loadSettings() {
       sw('set-weekly', 'דוח שבועי', 'נשלח בכל יום ראשון כשה-WhatsApp מחובר', d.weekly_report_enabled !== false) +
       sw('set-orders', 'התראות הזמנה', 'כשמוצר עומד להיגמר', d.order_alerts_enabled !== false) +
       sw('set-network', 'השתתפות ברשת', 'התאמות העברת מלאי וקנייה משותפת עם חנויות אחרות', !!d.network_opt_in) +
+      '<div id="net-disclose"></div>' +
       '<div class="sec" style="margin:20px 0 12px">הנתונים שלך</div>' +
       '<div class="net-card"><div class="net-title">קוד הגישה לחנות</div>' +
         '<div class="net-sub">נדרש כדי לפתוח את החנות במכשיר אחר. שמור אותו במקום בטוח.</div>' +
@@ -1590,6 +1596,17 @@ async function gxToggleSetting(id) {
   const on = el.classList.contains('off');          // about to turn on
   const key = { 'set-weekly': 'weekly_report_enabled', 'set-orders': 'order_alerts_enabled',
                 'set-network': 'network_opt_in' }[id];
+  if (id === 'set-network' && on) {
+    // joining shares data with other stores: say what, and ask, before it happens
+    const box = document.getElementById('net-disclose');
+    if (box) {
+      box.innerHTML = '<div class="net-card"><div class="net-title">להצטרף לרשת?</div>' +
+        '<div class="net-sub">' + GX_NET_DISCLOSURE + '</div>' +
+        '<div class="net-row"><button class="btn btnp" onclick="gxSetNetwork(true)">הצטרף לרשת</button>' +
+        '<button class="btn" onclick="document.getElementById(\'net-disclose\').innerHTML=\'\'">ביטול</button></div></div>';
+      return;
+    }
+  }
   const r = await gxFetch('/store/' + encodeURIComponent(gxStore()) + '/settings', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ [key]: on }) });

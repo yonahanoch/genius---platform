@@ -641,24 +641,28 @@ def test_contact_needs_both_sides_and_messages_are_fixed_text():
     main.send_whatsapp = lambda ph, msg: sent.append((ph, msg)) or True
     try:
         la = C.get("/network/transfer-opportunities?store_id=" + A, headers={"X-Store-Token": ta}).json
-        opp = [o for o in la["opportunities"] if o["from_store_id"] == A and o["to_store_id"] == B][0]
-        assert "contact_phone" not in opp
-        body = {"from_store_id": A, "to_store_id": B, "product_name": opp["product_name"], "store_id": A}
+        name_b = main.load_db()["stores"][B]["name"]
+        opp = [o for o in la["opportunities"] if o["from_store_id"] == A and o["to_store_name"] == name_b][0]
+        assert "contact_phone" not in opp and opp["to_store_id"] != B
+        body = {"from_store_id": A, "to_store_id": opp["to_store_id"], "product_name": opp["product_name"], "store_id": A}
         r = C.post("/network/transfer-opportunities/notify?store_id=" + A, json=body, headers={"X-Store-Token": ta})
         assert r.status_code == 200 and r.json["both_agreed"] is False
         assert sent == [("0521110002", main.MATCH_MSG)]          # fixed text, no names/phones
         lb = C.get("/network/transfer-opportunities?store_id=" + B, headers={"X-Store-Token": tb}).json
-        ob = [o for o in lb["opportunities"] if o["from_store_id"] == A][0]
+        ob = [o for o in lb["opportunities"] if o["to_store_id"] == B
+              and o["from_store_name"] == main.load_db()["stores"][A]["name"]][0]
         assert ob["other_asked"] is True and "contact_phone" not in ob
-        body["store_id"] = B
+        assert ob["from_store_id"] != A                     # B never gets A's id (it can be a phone)
+        body = {"from_store_id": ob["from_store_id"], "to_store_id": B,
+                "product_name": ob["product_name"], "store_id": B}
         r = C.post("/network/transfer-opportunities/notify?store_id=" + B, json=body, headers={"X-Store-Token": tb})
         assert r.json["both_agreed"] is True
         la = C.get("/network/transfer-opportunities?store_id=" + A, headers={"X-Store-Token": ta}).json
-        oa = [o for o in la["opportunities"] if o["to_store_id"] == B][0]
+        oa = [o for o in la["opportunities"] if o["from_store_id"] == A and o["to_store_name"] == name_b][0]
         assert oa["contact_phone"] == "0521110002"
         # asking again sends nothing new (recorded in the db, so all workers agree)
         n = len(sent)
-        body["store_id"] = A
+        body = {"from_store_id": A, "to_store_id": oa["to_store_id"], "product_name": oa["product_name"], "store_id": A}
         r = C.post("/network/transfer-opportunities/notify?store_id=" + A, json=body, headers={"X-Store-Token": ta})
         assert r.status_code == 200 and r.json["already_requested"] is True and len(sent) == n
     finally:
@@ -2142,6 +2146,89 @@ def test_neon_pooler_rewrite_touches_only_the_host():
         "postgresql://o:p@ep-a-1.eu-central-1.aws.neon.tech/db"     # host names are case-insensitive
     assert f("postgresql://u:p@db-pooler.example.com/x") == "postgresql://u:p@db-pooler.example.com/x"
     assert f("postgresql://u:p@ep-x.us-east-2.aws.neon.tech/db") == "postgresql://u:p@ep-x.us-east-2.aws.neon.tech/db"
+
+
+
+# ---------------- network privacy: a store id is the owner's phone ----------------
+
+def _tag(ph):
+    return "".join("אבגדהוזחטי"[int(c)] for c in ph[-9:])     # the whole number: unique per store
+
+
+def _two_onboarded_network_stores(pa="0521230001", pb="0521230002"):
+    """Like _two_network_stores, but created the real way — /onboard with a
+    phone — so each store id IS the owner's phone ("0" + national number)."""
+    from datetime import datetime, timedelta
+    ids, toks = [], []
+    # names carry no digits, so a phone found in a response came from an id
+    for ph, name in ((pa, "מכולת א " + _tag(pa)), (pb, "מכולת ב " + _tag(pb))):
+        r = C.post("/onboard", json={"name": name, "phone": ph})
+        assert r.status_code in (200, 201), r.json
+        ids.append(r.json["store_id"]); toks.append(r.json["store_token"])
+    with main._RATE_LOCK:                 # don't use up the per-address signup limit of later tests
+        for k in [k for k in main._RATE if k[0] == "onboard"]:
+            del main._RATE[k]
+    A, B = ids
+    d0 = datetime(2026, 5, 1)
+    rows_a = ["date,product,qty"] + ["%s,אחר,5" % (d0 + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+    rows_a += ["%s,מוצר רשת,3" % (d0 + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(10)]
+    rows_b = ["date,product,qty"] + ["%s,מוצר רשת,10" % (d0 + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+    upload(A, "\n".join(rows_a), token=toks[0]); upload(B, "\n".join(rows_b), token=toks[1])
+    with main.db_lock():
+        db = main.load_db()
+        db["stores"][A].update(stock={"מוצר רשת": 50}, network_opt_in=True)
+        db["stores"][B].update(stock={"מוצר רשת": 5}, network_opt_in=True)
+        main._save_rule_analysis(db, A)
+        main._save_rule_analysis(db, B)
+        main.save_db(db)
+    return A, toks[0], B, toks[1]
+
+
+def test_network_screens_never_show_another_stores_phone_before_consent():
+    A, ta, B, tb = _two_onboarded_network_stores()
+    assert A.endswith("521230001") and B.endswith("521230002")      # the id really is the phone
+    phone_b = ("521230002",)
+    la = C.get("/network/transfer-opportunities?store_id=" + A, headers={"X-Store-Token": ta})
+    gb = C.get("/network/group-buying?store_id=" + A, headers={"X-Store-Token": ta})
+    for body in (la.get_data(as_text=True), gb.get_data(as_text=True)):
+        assert not any(p in body for p in phone_b), body[:400]
+    opp = [o for o in la.json["opportunities"] if o["from_store_id"] == A and o["to_store_name"].endswith(_tag(B))][0]
+    assert opp["to_store_id"] != B and "contact_phone" not in opp
+    # asking for contact works with what the screen was given, and leaks nothing either
+    sent = []
+    orig = main.send_whatsapp
+    main.send_whatsapp = lambda ph, msg: sent.append(ph) or True
+    try:
+        body = {"from_store_id": opp["from_store_id"], "to_store_id": opp["to_store_id"],
+                "product_name": opp["product_name"], "store_id": A}
+        r = C.post("/network/transfer-opportunities/notify?store_id=" + A, json=body, headers={"X-Store-Token": ta})
+        assert r.status_code == 200 and r.json["both_agreed"] is False, r.json
+        assert not any(p in r.get_data(as_text=True) for p in phone_b), r.json
+        assert len(sent) == 1                                       # B was told (server side, by phone)
+        # B accepts from its own screen; only now does A see B's phone
+        lb = C.get("/network/transfer-opportunities?store_id=" + B, headers={"X-Store-Token": tb}).json
+        ob = [o for o in lb["opportunities"] if o["to_store_id"] == B and o["from_store_name"].endswith(_tag(A))][0]
+        assert ob["from_store_id"] != A and ob["other_asked"] is True
+        r = C.post("/network/transfer-opportunities/notify?store_id=" + B, headers={"X-Store-Token": tb},
+                   json={"from_store_id": ob["from_store_id"], "to_store_id": ob["to_store_id"],
+                         "product_name": ob["product_name"], "store_id": B})
+        assert r.json["both_agreed"] is True
+        la = C.get("/network/transfer-opportunities?store_id=" + A, headers={"X-Store-Token": ta}).json
+        assert [o for o in la["opportunities"] if o["from_store_id"] == A
+                and o["to_store_name"].endswith(_tag(B))][0]["contact_phone"].endswith("521230002")
+    finally:
+        main.send_whatsapp = orig
+
+
+def test_network_reference_cannot_be_turned_back_into_a_phone():
+    A, ta, B, tb = _two_onboarded_network_stores("0521240001", "0521240002")
+    la = C.get("/network/transfer-opportunities?store_id=" + A, headers={"X-Store-Token": ta}).json
+    ref = [o for o in la["opportunities"] if o["from_store_id"] == A
+           and o["to_store_name"].endswith(_tag(B))][0]["to_store_id"]
+    # not the phone, not a plain hash of it, and the same for every screen load
+    assert ref != B and hashlib.sha256(B.encode()).hexdigest()[:len(ref)] not in ref
+    again = C.get("/network/transfer-opportunities?store_id=" + A, headers={"X-Store-Token": ta}).json
+    assert ref in [o["to_store_id"] for o in again["opportunities"]]
 
 
 if __name__ == "__main__":

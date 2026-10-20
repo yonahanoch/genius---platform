@@ -1865,6 +1865,49 @@ def caller_store_ids(db):
     return {sid} if store and has_store_access(store) else set()
 
 
+# A store that signed up with a phone has the id "0" + that phone. Network
+# screens are shown to OTHER stores, so a raw id there is the owner's phone,
+# handed out before either side asked to be put in touch — the screen itself
+# promised the opposite (found 2026-10-20; tests built stores with
+# "store_test_…" ids, so no test could see it). Other stores are therefore
+# named by an opaque reference: HMAC with a key kept in the database, so it is
+# stable across restarts and instances and cannot be reversed by hashing
+# phone numbers.
+NET_REF_KV = "network_ref_key"
+_NET_KEY = None
+
+
+def _net_key():
+    global _NET_KEY
+    if _NET_KEY is None:
+        conn = _connect()
+        row = conn.execute("SELECT json FROM kv WHERE key=?", (NET_REF_KV,)).fetchone()
+        if row is None:
+            conn.execute("INSERT INTO kv (key, json) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
+                         (NET_REF_KV, json.dumps(secrets.token_hex(32))))
+            row = conn.execute("SELECT json FROM kv WHERE key=?", (NET_REF_KV,)).fetchone()
+        _NET_KEY = json.loads(row[0]).encode()
+    return _NET_KEY
+
+
+def _net_ref(store_id):
+    return "st_" + hmac.new(_net_key(), str(store_id).encode(), hashlib.sha256).hexdigest()[:20]
+
+
+def _public_store_id(db, store_id, mine):
+    """The caller's own stores and demo stores keep their id; any other real
+    store is shown only by its reference."""
+    if store_id in mine or db.get("stores", {}).get(store_id, {}).get("demo"):
+        return store_id
+    return _net_ref(store_id)
+
+
+def _is_store(given, store_id):
+    """Does an id sent back by a screen name this store (raw id or reference)?"""
+    given = str(given or "")
+    return bool(given) and (given == store_id or hmac.compare_digest(given, _net_ref(store_id)))
+
+
 def _visible(db, store_ids, mine):
     """An opportunity is shown when every store in it is a demo store, or when
     the caller owns one of the stores in it."""
@@ -1933,6 +1976,8 @@ def transfer_opportunities():
             # contact details only once BOTH stores asked to be put in touch
             if me in agreed and other in agreed:
                 o["contact_phone"] = db["stores"][other].get("phone")
+        o["from_store_id"] = _public_store_id(db, o["from_store_id"], mine)
+        o["to_store_id"] = _public_store_id(db, o["to_store_id"], mine)
         out.append(o)
     return jsonify({"opportunities": out, "count": len(out)})
 
@@ -1956,8 +2001,8 @@ def notify_transfer_opportunities():
         db = load_db()
         match = None
         for o in find_transfer_opportunities(db):
-            if (o["from_store_id"] == data.get("from_store_id")
-                    and o["to_store_id"] == data.get("to_store_id")
+            if (_is_store(data.get("from_store_id"), o["from_store_id"])
+                    and _is_store(data.get("to_store_id"), o["to_store_id"])
                     and o["product_name"] == data.get("product_name")):
                 match = o
                 break
@@ -1986,8 +2031,9 @@ def notify_transfer_opportunities():
         else:
             outbox = [(db["stores"][other].get("phone"), MATCH_MSG)]
     sent = [bool(send_whatsapp(ph, msg)) for ph, msg in outbox]
+    who = [other] if not both else parties
     return jsonify({"success": all(sent), "demo": False, "both_agreed": both,
-                    "notified": [other] if not both else parties})
+                    "notified": [_public_store_id(db, p, mine) for p in who]})
 
 
 @app.route("/store/<store_id>/settings", methods=["POST"])
@@ -2924,6 +2970,9 @@ def group_buying():
     mine = caller_store_ids(db)
     opps = [o for o in find_group_buying_opportunities(db)
             if _visible(db, [p["store_id"] for p in o["participants"]], mine)]
+    for o in opps:
+        for p in o["participants"]:
+            p["store_id"] = _public_store_id(db, p["store_id"], mine)
     return jsonify({"opportunities": opps, "count": len(opps)})
 
 
@@ -2966,7 +3015,7 @@ def notify_group_buying():
         if part["store_id"] == me:
             continue
         ok = send_whatsapp(db["stores"][part["store_id"]].get("phone"), GROUP_MSG)
-        sent.append({"store_id": part["store_id"], "sent": bool(ok)})
+        sent.append({"store_id": _public_store_id(db, part["store_id"], mine), "sent": bool(ok)})
     return jsonify({"product_name": match["product_name"], "notified": sent, "demo": False})
 
 

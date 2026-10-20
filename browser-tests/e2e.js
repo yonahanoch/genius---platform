@@ -147,6 +147,17 @@ const { chromium } = require('playwright');
   chk('registration attached the phone to the same store', (await txt('#ob4')).includes('הטלפון נוסף לחנות'), await txt('#ob4'));
   chk('no second store created', (await pg.$$eval('#store-picker option', o => o.length)) === 5);
   await go('network');
+  const nw2 = await txt('#network-list');
+  chk('the join card says what other stores see, price included', nw2.includes('מחיר מוצע לעודפים') && nw2.includes('לא רואות את המכירות'), nw2.slice(0, 300));
+  // the settings switch must not join without showing the same text and asking
+  await go('settings');
+  await pg.click('#set-network');
+  await pg.waitForTimeout(800);
+  const dis = await txt('#net-disclose');
+  const stillOut = await pg.evaluate(() => document.getElementById('set-network').classList.contains('off'));
+  chk('the settings switch asks before joining', dis.includes('להצטרף לרשת?') && dis.includes('מחיר מוצע לעודפים') && stillOut, dis.slice(0, 200));
+  await pg.click('#net-disclose >> text=ביטול');
+  await go('network');
   await pg.click('#network-list >> text=הצטרף לרשת');
   await pg.waitForTimeout(1500);
   chk('joining is explicit and saved', (await txt('#network-list')).includes('משתתפת ברשת'), await txt('#network-list'));
