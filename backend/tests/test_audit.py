@@ -2231,6 +2231,33 @@ def test_network_reference_cannot_be_turned_back_into_a_phone():
     assert ref in [o["to_store_id"] for o in again["opportunities"]]
 
 
+
+def test_missing_requirements_are_detected_by_import_name():
+    req = "flask==3.0.0\nflask-cors==4.0.0\npsycopg[binary]>=3.2   # comment\n-r other.txt\nno-such-package-gx==1.0\n"
+    missing = main._missing_requirements(req)
+    assert "no-such-package-gx" in missing and "flask" not in missing and "flask-cors" not in missing, missing
+
+
+def test_self_update_refuses_a_version_whose_packages_are_missing():
+    # 2026-10-21: the Postgres version deployed itself, Replit had DATABASE_URL
+    # from its built-in database, psycopg wasn't installed -> crash on every boot
+    import shutil, subprocess
+    base, server, commit = _deploy_sandbox()
+    try:
+        dev = os.path.join(base, "dev")
+        before = main._commit(server)
+        with open(os.path.join(dev, "backend", "requirements.txt"), "w") as f:
+            f.write("flask\nno-such-package-gx>=1\n")
+        g = lambda *a: subprocess.run(["git", "-C", dev, "-c", "user.name=t", "-c", "user.email=t@t"] + list(a),
+                                      capture_output=True, text=True, check=True)
+        g("add", "-A"); g("commit", "-qm", "needs a package"); g("push", "-q", "origin", "HEAD:main")
+        result, detail, new = main.check_for_update(root=server)
+        assert result == "missing_packages" and "no-such-package-gx" in detail and new is None, (result, detail)
+        assert main._commit(server) == before                     # still on the version that runs
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 if __name__ == "__main__":
     fails = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

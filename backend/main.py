@@ -302,7 +302,12 @@ class _PgConn:
     """
 
     def __init__(self, url):
-        import psycopg
+        try:
+            import psycopg
+        except ImportError:
+            # say what to do, instead of a bare traceback on every boot
+            raise RuntimeError('DATABASE_URL is set but the Postgres driver is not installed: '
+                               'run  pip install "psycopg[binary]"  (or remove DATABASE_URL to use SQLite)')
         self._psycopg = psycopg
         self._url = url
         self._c = None
@@ -2190,6 +2195,38 @@ def _test_env():
             if k not in APP_ENV_KEYS and not k.startswith(APP_ENV_PREFIXES)}
 
 
+# pip name -> import name, where they differ
+_IMPORT_NAMES = {"flask-cors": "flask_cors", "apscheduler": "apscheduler", "pyyaml": "yaml"}
+
+
+def _missing_requirements(requirements_text):
+    """
+    Packages a version lists that this interpreter can't import. Found the
+    hard way (2026-10-21): the Postgres version deployed itself, Replit had
+    DATABASE_URL set by its built-in database, psycopg was not installed —
+    and the server crashed on every boot for two weeks. Auto-deploy pulls
+    code, never packages, so it now refuses to switch to a version whose
+    packages are missing and keeps serving the old one.
+    """
+    import importlib.util
+    missing = []
+    for line in (requirements_text or "").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        name = re.split(r"[\[<>=!~;\s]", line, 1)[0].strip().lower()
+        if not name:
+            continue
+        mod = _IMPORT_NAMES.get(name, name.replace("-", "_"))
+        try:
+            found = importlib.util.find_spec(mod) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            missing.append(name)
+    return missing
+
+
 def _test_failure_summary(output):
     """The lines that say WHAT failed, not the tail of the run: the FAIL lines
     and the final count, falling back to the last lines (e.g. a crash)."""
@@ -2248,6 +2285,12 @@ def check_for_update(root=None, test_cmd=None, branch=None):
         if not ok:
             _DEPLOY_FAILED.add(remote)
             return "tests_failed", "%s: %s" % (remote[:7], tail), None
+        missing = _missing_requirements(_git(root, "show", "%s:backend/requirements.txt" % remote).stdout)
+        if missing:
+            # tests run with the app's settings stripped, so they can't see that
+            # this server needs a package the new version imports at boot
+            return ("missing_packages", "%s needs: %s — run pip install -r backend/requirements.txt"
+                    % (remote[:7], ", ".join(missing)), None)
         m = _git(root, "merge", "--ff-only", remote)
         if m.returncode != 0:
             return "merge_failed", m.stderr.strip()[-300:], None
