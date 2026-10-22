@@ -214,3 +214,17 @@ cp backups/genius-2026-09-27.db genius.db
 
 בדיקות מול Postgres (לא נוגעות במסד החי — `DATABASE_URL` מוסר מהסביבה בכל הרצת בדיקות):
 `GENIUS_TEST_DATABASE_URL=postgresql://…/test_db python3 backend/tests/test_audit.py`
+
+## אירוח חינמי ב-Render
+
+השרת ב-Replit החינמי לא עונה כשאף אחד לא פותח את Replit. ב-Render החינמי השרת **מתעורר לבד** כשלקוח נכנס (כדקה המתנה אחרי 15 דקות בלי תנועה). Render מעלה כל Push ל-GitHub בעצמו, ורק אם כל הבדיקות עוברות — אם הבנייה נכשלת, הגרסה הקודמת ממשיכה לרוץ.
+
+הדיסק ב-Render נמחק בכל עדכון ובכל הירדמות, ולכן המידע **חייב** להיות ב-Postgres חיצוני. Postgres החינמי של Render נמחק אחרי 30 יום — לכן Neon.
+
+1. **Neon** — [neon.com](https://neon.com) ← חשבון חינמי ← פרויקט חדש ← להעתיק את ה-Connection string (מתחיל ב-`postgresql://`).
+2. **Render** — [render.com](https://render.com) ← הרשמה עם GitHub ← New ← **Blueprint** ← לבחור את `genius---platform`. Render קורא את `render.yaml` ושואל פעם אחת על `DATABASE_URL` — להדביק את הכתובת מ-Neon. `ADMIN_TOKEN` נוצר לבד (רואים אותו ב-Environment של השירות).
+3. הבנייה הראשונה מריצה את כל הבדיקות (כ-2–3 דקות). כשהיא מסתיימת: `https://<שם השירות>.onrender.com/version` צריך להראות `"storage": "postgres"`.
+4. לעדכן את כתובת השרת באתר (`GENIUS_API_URL` ב-`docs/index.html`) לכתובת של Render.
+5. `PROXY_HOPS`: לפתוח `/whoami` משני מכשירים ולמדוד (ב-Replit נמדד 3; ב-Render זה יכול להיות שונה). עד אז ברירת המחדל 0 בטוחה — רק מגבלות הקצב משותפות לכולם.
+
+מגבלות: 750 שעות שרת בחודש (מספיק לשירות אחד שרץ תמיד); הניתוח הלילי ב-3:00 לא ירוץ אם השרת ישן באותה שעה.

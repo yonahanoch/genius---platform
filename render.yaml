@@ -1,0 +1,36 @@
+# Render Blueprint — free web service for the Genius backend.
+# Render: New → Blueprint → this repo. It asks for DATABASE_URL once (Neon).
+#
+# Why these choices (checked against Render's docs, 2026-10-22):
+# - plan free: spins down after 15 min without traffic, ~1 min to wake,
+#   750 instance hours a month, and the disk is wiped on every deploy and
+#   spin-down — so the data must live in Postgres (DATABASE_URL), not genius.db.
+# - the build runs the whole test suite: "If the build fails, Render cancels
+#   the deploy, and your original service instance continues running."
+#   A version that fails its tests never goes live. Tests never touch
+#   DATABASE_URL (the suite drops it).
+# - PYTHON_VERSION pinned: Render's default is 3.14, newer than this code is
+#   tested on; 3.13 is what the suite runs on.
+# - one worker: the nightly scheduler and in-memory rate limits live in the
+#   process; threads handle concurrent requests.
+# - PROXY_HOPS is NOT set here on purpose: measure it with /whoami after the
+#   first deploy (Replit measured 3; Render's chain may differ).
+services:
+  - type: web
+    name: genius-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    # gunicorn here, not in requirements.txt: Replit runs main.py directly, and its
+    # auto-deploy refuses versions whose requirements aren't installed there
+    buildCommand: pip install -r requirements.txt "gunicorn>=22" && python tests/test_audit.py
+    startCommand: gunicorn --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT main:app
+    healthCheckPath: /version
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false

@@ -5617,6 +5617,8 @@ if __name__ == "__main__":
     print("=" * 50)
     if AUTO_DEPLOY:
         threading.Thread(target=_deploy_loop, name="auto-deploy", daemon=True).start()
-    if os.environ.get("GX_RESTARTED") and not _wait_for_port(8080):
-        print("! פורט 8080 עדיין תפוס אחרי 15 שניות", flush=True)
-    app.run(host="0.0.0.0", port=8080)
+    # Render (and most hosts) say which port to use in PORT; Replit uses 8080
+    port = int(os.environ.get("PORT", "8080"))
+    if os.environ.get("GX_RESTARTED") and not _wait_for_port(port):
+        print("! פורט %d עדיין תפוס אחרי 15 שניות" % port, flush=True)
+    app.run(host="0.0.0.0", port=port)

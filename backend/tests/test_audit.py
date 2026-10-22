@@ -1647,6 +1647,20 @@ def test_proxy_health_needs_traffic_and_ignores_direct_callers():
 
 # ---------------- self-update ----------------
 
+SKIPPED = []
+
+
+def _no_git():
+    """The self-update tests need git. A host whose build image has none
+    (Render deploys from GitHub itself, so the server never self-updates
+    there) must not fail every build on them — skip, and say so."""
+    import shutil, inspect
+    if shutil.which("git"):
+        return False
+    SKIPPED.append(inspect.stack()[1].function)
+    return True
+
+
 def _deploy_sandbox():
     """A bare 'GitHub' repo and a 'server' clone of it, with a tiny project
     whose test file passes or fails on demand."""
@@ -1672,6 +1686,8 @@ def _deploy_sandbox():
 
 def test_self_update_deploys_only_after_tests_pass():
     import shutil
+    if _no_git():
+        return
     base, server, commit = _deploy_sandbox()
     try:
         assert main.check_for_update(root=server)[0] == "up_to_date"
@@ -1687,6 +1703,8 @@ def test_self_update_deploys_only_after_tests_pass():
 
 def test_self_update_never_deploys_a_failing_commit_and_does_not_retry_it():
     import shutil
+    if _no_git():
+        return
     base, server, commit = _deploy_sandbox()
     try:
         before = main._commit(server)
@@ -1703,6 +1721,8 @@ def test_self_update_never_deploys_a_failing_commit_and_does_not_retry_it():
 
 def test_self_update_leaves_hand_edits_alone():
     import shutil
+    if _no_git():
+        return
     base, server, commit = _deploy_sandbox()
     try:
         with open(os.path.join(server, "backend", "tests", "test_audit.py"), "a") as f:
@@ -1733,6 +1753,8 @@ def test_deploy_failure_names_the_failing_test():
 
 def test_self_update_is_not_blocked_by_files_the_host_rewrites():
     import shutil, subprocess
+    if _no_git():
+        return
     base, server, commit = _deploy_sandbox()
     try:
         # .replit is tracked upstream, then Replit edits it on the server
@@ -1765,6 +1787,8 @@ def test_candidate_tests_run_without_this_servers_settings():
     # what happened on Replit: PROXY_HOPS=3 in the environment made the
     # suite fail there, so no update could ever have gone through
     import shutil, subprocess
+    if _no_git():
+        return
     base, server, commit = _deploy_sandbox()
     dev = os.path.join(base, "dev")
     saved = {k: os.environ.get(k) for k in ("PROXY_HOPS", "ADMIN_TOKEN", "STRIPE_SECRET_KEY")}
@@ -2242,6 +2266,8 @@ def test_self_update_refuses_a_version_whose_packages_are_missing():
     # 2026-10-21: the Postgres version deployed itself, Replit had DATABASE_URL
     # from its built-in database, psycopg wasn't installed -> crash on every boot
     import shutil, subprocess
+    if _no_git():
+        return
     base, server, commit = _deploy_sandbox()
     try:
         dev = os.path.join(base, "dev")
@@ -2268,5 +2294,7 @@ if __name__ == "__main__":
         except Exception as e:  # noqa: BLE001
             fails += 1
             print("FAIL", name, "->", repr(e)[:300])
+    if SKIPPED:
+        print("\nSKIPPED (no git on this machine): " + ", ".join(sorted(set(SKIPPED))))
     print("\n%d passed, %d failed" % (len(tests) - fails, fails))
     sys.exit(1 if fails else 0)
